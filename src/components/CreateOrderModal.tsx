@@ -426,17 +426,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                   placeholder="Flat 402, Block B"
                 />
               </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Nearby Landmark</label>
-                <input
-                  type="text"
-                  value={landmark}
-                  onChange={(e) => setLandmark(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  placeholder="Near Apollo Pharmacy / Metro Gate 2"
-                />
-              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
@@ -463,17 +452,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                   placeholder="560001"
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="text-slate-400 block mb-1">Rider Delivery Instructions</label>
-              <input
-                type="text"
-                value={deliveryInstructions}
-                onChange={(e) => setDeliveryInstructions(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-                placeholder="e.g. Leave with guard / Don't ring doorbell / Call on gate arrival"
-              />
             </div>
           </div>
 
@@ -507,13 +485,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                         <div className="text-[10px] text-slate-400 font-normal">Collect cash from customer at door</div>
                       </div>
                     </div>
-                    <input
-                      type="radio"
-                      name="payMethod"
-                      checked={paymentMethod === 'cash_on_delivery'}
-                      onChange={() => {}}
-                      className="text-amber-500"
-                    />
                   </label>
 
                   <label
@@ -534,13 +505,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                         <div className="text-[10px] text-slate-400 font-normal">Instant digital payment transfer</div>
                       </div>
                     </div>
-                    <input
-                      type="radio"
-                      name="payMethod"
-                      checked={paymentMethod === 'upi'}
-                      onChange={() => {}}
-                      className="text-purple-500"
-                    />
                   </label>
                 </div>
               </div>
@@ -564,13 +528,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                         <div className="text-[10px] text-slate-400 font-normal">Money already received</div>
                       </div>
                     </div>
-                    <input
-                      type="radio"
-                      name="payStatus"
-                      checked={paymentStatus === 'clear'}
-                      onChange={() => {}}
-                      className="text-emerald-500"
-                    />
                   </label>
 
                   <label
@@ -588,13 +545,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
                         <div className="text-[10px] text-slate-400 font-normal">Worker must collect ₹{totalAmount}</div>
                       </div>
                     </div>
-                    <input
-                      type="radio"
-                      name="payStatus"
-                      checked={paymentStatus === 'pending'}
-                      onChange={() => {}}
-                      className="text-amber-500"
-                    />
                   </label>
                 </div>
               </div>
@@ -672,7 +622,7 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
           <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-3">
             <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
               <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Direct push to Firebase database <strong className="text-slate-200">commanding-palisade-58gvj</strong></span>
+              <span>Direct push to Firebase database <strong className="text-slate-200">brozza-1f6be</strong></span>
             </div>
 
             <div className="flex items-center gap-2">

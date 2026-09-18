@@ -1,16 +1,20 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getFirestore, 
+  initializeFirestore,
   collection, 
   onSnapshot, 
   doc, 
+  setDoc,
   updateDoc, 
   addDoc, 
   serverTimestamp, 
   query, 
   orderBy, 
   limit,
-  Firestore
+  Firestore,
+  setLogLevel,
+  memoryLocalCache
 } from 'firebase/firestore';
 import { 
   getDatabase, 
@@ -20,17 +24,33 @@ import {
   push, 
   update 
 } from 'firebase/database';
-import { Order, OrderStatus, PaymentStatus, ParcelType, PaymentMethodType } from '../types';
+import { Order, OrderStatus, PaymentStatus, ParcelType, PaymentMethodType, Product } from '../types';
 
-export const firebaseConfig = {
-  apiKey: "AIzaSyAO_1T-8vlvcTRGd1X88Rs26_gqA85tI4Y",
-  authDomain: "commanding-palisade-58gvj.firebaseapp.com",
-  projectId: "commanding-palisade-58gvj",
-  storageBucket: "commanding-palisade-58gvj.firebasestorage.app",
-  messagingSenderId: "749088653483",
-  appId: "1:749088653483:web:196293fd4a7678ec2e37ee",
-  firestoreDatabaseId: "ai-studio-remixthebarozzac-0a0443a4-c36c-4a75-b9f6-4c49d5a7fd1d",
-  databaseURL: "https://commanding-palisade-58gvj-default-rtdb.firebaseio.com"
+// Suppress transient WebChannel network retry / offline info logs from bubbling to dev overlays
+try {
+  setLogLevel('silent');
+} catch (e) {}
+
+export interface AppFirebaseConfig {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId: string;
+  appId: string;
+  measurementId?: string;
+  firestoreDatabaseId?: string;
+  databaseURL?: string;
+}
+
+export const firebaseConfig: AppFirebaseConfig = {
+  apiKey: "AIzaSyDltNqesCmeG8UCh_1JJFpdUxyg6vx6pBg",
+  authDomain: "brozza-1f6be.firebaseapp.com",
+  projectId: "brozza-1f6be",
+  storageBucket: "brozza-1f6be.firebasestorage.app",
+  messagingSenderId: "297709421963",
+  appId: "1:297709421963:web:a4bc73ae0944d173cb5b8e",
+  measurementId: "G-EF03518J0C"
 };
 
 // Initialize Firebase App singleton
@@ -39,27 +59,37 @@ export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export let firestoreDb: Firestore | null = null;
 export let realtimeDb: ReturnType<typeof getDatabase> | null = null;
 
-// Initialize Firestore targeting the specific user databaseId, with graceful fallback
+// Initialize Firestore targeting the specific databaseId, using memoryLocalCache to prevent
+// iframe sandbox IndexedDB permission restrictions and auto-detecting long-polling cleanly
 try {
   if (firebaseConfig.firestoreDatabaseId) {
-    firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    firestoreDb = initializeFirestore(app, {
+      localCache: memoryLocalCache(),
+      experimentalAutoDetectLongPolling: true
+    }, firebaseConfig.firestoreDatabaseId);
   } else {
-    firestoreDb = getFirestore(app);
+    firestoreDb = initializeFirestore(app, {
+      localCache: memoryLocalCache(),
+      experimentalAutoDetectLongPolling: true
+    });
   }
 } catch (err) {
-  console.warn("Target Firestore DB init notice, falling back to default:", err);
   try {
-    firestoreDb = getFirestore(app);
+    firestoreDb = firebaseConfig.firestoreDatabaseId 
+      ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+      : getFirestore(app);
   } catch (e2) {
-    console.error("Default Firestore DB init failed:", e2);
+    console.warn("Firestore fallback init notice:", e2);
   }
 }
 
-// Initialize Realtime DB
+// Initialize Realtime DB safely only if explicitly configured
 try {
-  realtimeDb = getDatabase(app);
+  if (firebaseConfig.databaseURL && firebaseConfig.databaseURL.trim().length > 0) {
+    realtimeDb = getDatabase(app);
+  }
 } catch (err) {
-  console.warn("Realtime Database initialization notice:", err);
+  realtimeDb = null;
 }
 
 export interface FirebaseConnectionStatus {
@@ -131,14 +161,44 @@ export function normalizeParcelType(raw: any): ParcelType {
  */
 export function normalizeOrderStatus(raw: any): OrderStatus {
   if (!raw) return 'pending';
-  const s = String(raw).toLowerCase();
+  const s = String(raw).toLowerCase().replace(/[\s-]+/g, '_');
   if (s === 'received' || s === 'accepted' || s === 'parcel_received') return 'received';
   if (s === 'processing' || s === 'packing' || s === 'preparing') return 'processing';
   if (s === 'shipped' || s === 'dispatched') return 'shipped';
-  if (s === 'out_for_delivery' || s === 'on_the_way' || s === 'rider_assigned') return 'out_for_delivery';
+  if (s === 'out_for_delivery' || s.includes('out_for') || s.includes('delivery') || s === 'on_the_way' || s === 'rider_assigned') return 'out_for_delivery';
   if (s === 'delivered' || s === 'completed' || s === 'done') return 'delivered';
   if (s === 'cancelled' || s === 'rejected') return 'cancelled';
+  if (s === 'ordered' || s === 'booked' || s === 'pending') return 'pending';
   return 'pending';
+}
+
+/**
+ * Maps dish name or dish ID to actual customer dashboard dish image URL
+ */
+function getActualDishImageUrl(name: string, dishId?: string | number): string {
+  const n = String(name || '').toLowerCase();
+  const idStr = String(dishId || '');
+
+  if (n.includes('aalu') || n.includes('aloo') || n.includes('matar') || n.includes('curry')) return 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=300&q=80';
+  if (idStr === '1' || n.includes('french fries') || n.includes('fries')) return 'https://brozza.vercel.app/images/frenchh.png';
+  if (idStr === '2' || n.includes('veg chow')) return 'https://brozza.vercel.app/images/chow.png';
+  if (idStr === '3' || n.includes('egg chow')) return 'https://brozza.vercel.app/images/eggchowminn.png';
+  if (idStr === '4' || n.includes('pasta')) return 'https://brozza.vercel.app/images/pastaa.png';
+  if (idStr === '5' || n.includes('paneer')) return 'https://brozza.vercel.app/images/paneerchili.png';
+  if (idStr === '6' || n.includes('momo')) return 'https://brozza.vercel.app/images/momos.png';
+  if (idStr === '7' || n.includes('fried rice')) return 'https://brozza.vercel.app/images/fried.png';
+  if (idStr === '8' || n.includes('baby corn')) return 'https://brozza.vercel.app/images/babycornchili.png';
+  if (idStr === '9' || n.includes('mushroom')) return 'https://brozza.vercel.app/images/masroomchili.png';
+  if (idStr === '10' || n.includes('manchurian')) return 'https://brozza.vercel.app/images/menchurian.png';
+  if (idStr === '11' || n.includes('veg roll')) return 'https://brozza.vercel.app/images/vegrol.png';
+  if (idStr === '12' || n.includes('egg roll')) return 'https://brozza.vercel.app/images/eggrol.png';
+  if (idStr === '13' || n.includes('dosha') || n.includes('dosa')) return 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=300&q=80';
+  
+  if (n.includes('pizza')) return 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=300&q=80';
+  if (n.includes('burger')) return 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=300&q=80';
+  if (n.includes('coffee') || n.includes('beverage')) return 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&q=80';
+
+  return 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&q=80';
 }
 
 /**
@@ -148,63 +208,84 @@ export function normalizeOrderData(id: string, raw: any): Order {
   const method = normalizePaymentMethod(raw.paymentMethod || raw.payment_method || raw.payMode || raw.method);
   const paymentStatus = normalizePaymentStatus(raw.paymentStatus || raw.payment_status || raw.payStatus || raw.paid, method);
   const parcelType = normalizeParcelType(raw.parcelType || raw.parcel_type || raw.category || raw.type || raw.orderType);
-  const status = normalizeOrderStatus(raw.status || raw.order_status);
+  const status = normalizeOrderStatus(raw.status || raw.order_status || raw.parcelStatus);
 
-  // Address parsing with rich fields (like Blinkit / Domino's)
+  // Address parsing with rich fields (supporting Cafe orders & Express parcels)
   const cust = raw.customer || {};
-  const rawAddress = cust.address || raw.address || raw.deliveryAddress || raw.shippingAddress || raw.fullAddress || '';
-  const customerPhone = cust.phone || raw.phone || raw.phoneNumber || raw.mobile || raw.contact || '+91 98765 43210';
-  const customerName = cust.name || raw.customerName || raw.customer_name || raw.name || raw.userName || 'Customer';
+  const rawAddress = raw.customerAddress || raw.destinationLocation || cust.address || raw.address || raw.deliveryAddress || raw.shippingAddress || raw.fullAddress || '';
+  const customerPhone = raw.customerPhone || raw.customer_phone || cust.phone || raw.phone || raw.phoneNumber || raw.mobile || raw.contact || '+91 98765 43210';
+  const customerName = raw.customerName || raw.customer_name || cust.name || raw.name || raw.userName || 'Customer';
+
+  const rawTotal = Number(raw.totalPrice || raw.totalAmount || raw.total || raw.amount || raw.grandTotal || raw.price || 0);
+
+  const items = Array.isArray(raw.items) && raw.items.length > 0
+    ? raw.items.map((it: any, index: number) => {
+        const itemName = it.name || it.dishName || it.title || it.productName || 'Order Item';
+        const dishId = it.id || it.dishId;
+        const resolvedImage = it.image || it.imageUrl || it.img || it.dishImage || it.photo || it.picture || getActualDishImageUrl(itemName, dishId);
+        return {
+          id: dishId || `item_${index}`,
+          name: itemName,
+          sku: it.sku || (dishId ? `BRZ-DISH-${String(dishId).padStart(2, '0')}` : `SKU-${1000 + index}`),
+          price: Number(it.price || it.unitPrice || it.amount || 0),
+          quantity: Number(it.quantity || it.qty || 1),
+          image: resolvedImage
+        };
+      })
+    : [{
+        id: String(raw.dishId || 'item_0'),
+        name: raw.dishName || raw.productName || raw.item || (parcelType === 'hot_food' ? 'Farmhouse Cheese Burst Pizza' : 'Fresh Farm Grocery Essentials'),
+        sku: raw.sku || (raw.dishId ? `BRZ-DISH-${String(raw.dishId).padStart(2, '0')}` : 'BRZ-DISH-01'),
+        price: Number(raw.totalPrice && raw.quantity ? (raw.totalPrice / raw.quantity) : raw.price || rawTotal || 30),
+        quantity: Number(raw.quantity || 1),
+        image: raw.image || raw.imageUrl || raw.img || raw.dishImage || raw.photo || raw.picture || getActualDishImageUrl(raw.dishName || raw.productName || raw.item || '', raw.dishId)
+      }];
+
+  const orderNum = raw.orderNumber || raw.order_number || raw.orderId || raw.parcelId || (raw.trackingNumber ? `ORD-${raw.trackingNumber.slice(-6)}` : `ORD-${id.slice(0, 6).toUpperCase()}`);
+
+  let createdAtStr = new Date().toISOString();
+  if (raw.createdAt) {
+    if (typeof raw.createdAt === 'object' && typeof raw.createdAt.toDate === 'function') {
+      createdAtStr = raw.createdAt.toDate().toISOString();
+    } else if (typeof raw.createdAt === 'object' && raw.createdAt.seconds) {
+      createdAtStr = new Date(raw.createdAt.seconds * 1000).toISOString();
+    } else {
+      createdAtStr = String(raw.createdAt);
+    }
+  }
 
   return {
     id: id || raw.id || `ord_${Date.now()}`,
-    orderNumber: raw.orderNumber || raw.order_number || raw.orderId || `ORD-${id.slice(0, 6).toUpperCase()}`,
+    orderNumber: orderNum,
     customer: {
       name: customerName,
-      email: cust.email || raw.customerEmail || raw.email || 'customer@store.com',
+      email: cust.email || raw.customerEmail || raw.email || `${customerName.toLowerCase().replace(/\s+/g, '.')}@customer.com`,
       phone: customerPhone,
-      address: rawAddress || 'Flat 402, Green Valley Apartments, MG Road',
+      address: rawAddress || 'Indiranagar, Bangalore',
       flatNo: cust.flatNo || raw.flatNo || raw.flat || raw.houseNo || undefined,
       landmark: cust.landmark || raw.landmark || raw.nearBy || undefined,
-      city: cust.city || raw.city || 'Bangalore',
+      city: cust.city || raw.city || raw.destinationLocation || 'Giridih',
       pincode: cust.pincode || raw.pincode || raw.zip || raw.postalCode || '560001',
-      deliveryInstructions: cust.deliveryInstructions || raw.deliveryInstructions || raw.instructions || raw.notes || undefined
+      deliveryInstructions: cust.deliveryInstructions || raw.deliveryInstructions || raw.deliveryNotes || raw.instructions || raw.notes || undefined
     },
-    items: Array.isArray(raw.items) && raw.items.length > 0
-      ? raw.items.map((it: any, index: number) => ({
-          id: it.id || `item_${index}`,
-          name: it.name || it.title || it.productName || 'Order Item',
-          sku: it.sku || `SKU-${1000 + index}`,
-          price: Number(it.price || it.unitPrice || it.amount || 0),
-          quantity: Number(it.quantity || it.qty || 1),
-          image: it.image || it.imageUrl || undefined
-        }))
-      : [{
-          id: 'item_0',
-          name: raw.productName || raw.item || (parcelType === 'hot_food' ? 'Farmhouse Cheese Burst Pizza' : 'Fresh Farm Grocery Essentials'),
-          sku: 'SKU-EXPRESS-1',
-          price: Number(raw.totalAmount || raw.total || raw.amount || raw.price || 349),
-          quantity: 1
-        }],
-    totalAmount: Number(raw.totalAmount || raw.total || raw.amount || raw.grandTotal || raw.price || 0),
-    subtotal: Number(raw.subtotal || raw.subTotal || (Number(raw.totalAmount || raw.total || raw.amount || 0) * 0.9)),
+    items,
+    totalAmount: rawTotal,
+    subtotal: Number(raw.subtotal || raw.subTotal || (rawTotal * 0.9)),
     shippingFee: Number(raw.shippingFee || raw.shipping || raw.deliveryFee || 0),
     tax: Number(raw.tax || 0),
     status,
     paymentStatus,
     paymentMethod: method,
     parcelType,
-    createdAt: raw.createdAt 
-      ? (typeof raw.createdAt === 'object' && raw.createdAt.toDate ? raw.createdAt.toDate().toISOString() : String(raw.createdAt))
-      : new Date().toISOString(),
-    source: raw.source || 'customer_website',
-    trackingNumber: raw.trackingNumber || raw.tracking_number,
-    notes: raw.notes || raw.note || raw.customerNotes,
+    createdAt: createdAtStr,
+    source: raw.source || (raw.syncedToFirebase ? 'customer_storefront' : 'customer_website'),
+    trackingNumber: raw.trackingNumber || raw.tracking_number || raw.parcelId,
+    notes: raw.deliveryNotes || raw.notes || raw.note || raw.customerNotes,
     deliveryOtp: raw.deliveryOtp || raw.otp || `${Math.floor(1000 + Math.random() * 9000)}`,
     estimatedDeliveryMinutes: raw.estimatedDeliveryMinutes || raw.deliveryMinutes || (parcelType === 'quick_grocery' ? 10 : 30),
     assignedWorker: raw.assignedWorker || raw.workerName || raw.riderName || undefined,
-    parcelReceivedAt: raw.parcelReceivedAt || (status !== 'pending' ? raw.updatedAt || raw.createdAt : undefined),
-    deliveredAt: raw.deliveredAt || (status === 'delivered' ? raw.updatedAt || new Date().toISOString() : undefined),
+    parcelReceivedAt: raw.parcelReceivedAt || (status !== 'pending' ? (raw.updatedAt ? String(raw.updatedAt) : createdAtStr) : undefined),
+    deliveredAt: raw.deliveredAt || (status === 'delivered' ? (raw.updatedAt ? String(raw.updatedAt) : new Date().toISOString()) : undefined),
     cashCollected: raw.cashCollected ?? (paymentStatus === 'clear' && method === 'cash_on_delivery')
   };
 }
@@ -231,6 +312,9 @@ export function listenToFirestoreOrders(
       (snapshot) => {
         const loaded: Order[] = [];
         snapshot.forEach((docSnap) => {
+          if (docSnap.id === 'barozza_menu_catalog' || docSnap.data()?.isCatalog) {
+            return;
+          }
           loaded.push(normalizeOrderData(docSnap.id, docSnap.data()));
         });
         // Sort newest first
@@ -238,6 +322,10 @@ export function listenToFirestoreOrders(
         onUpdate(loaded);
       },
       (err) => {
+        if (err.code === 'unavailable' || err.message?.includes('unavailable')) {
+          // Firestore operates offline during transient reconnection
+          return;
+        }
         console.warn("Firestore snapshot error:", err);
         onError(err);
       }
@@ -259,7 +347,6 @@ export function listenToRTDBOrders(
   onError: (error: Error) => void
 ) {
   if (!realtimeDb) {
-    onError(new Error("Realtime Database is not initialized"));
     return () => {};
   }
 
@@ -288,14 +375,18 @@ export function listenToRTDBOrders(
         onUpdate(loaded);
       },
       (err) => {
-        console.warn("RTDB listener error:", err);
+        console.warn("RTDB listener notice:", err?.message || err);
         onError(err);
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      try {
+        unsubscribe();
+      } catch (e) {}
+    };
   } catch (err: any) {
-    onError(err);
+    console.warn("RTDB subscribe notice:", err?.message || err);
     return () => {};
   }
 }
@@ -364,3 +455,143 @@ export async function updateRTDBOrderStatus(
     updatedAt: new Date().toISOString()
   });
 }
+
+/**
+ * Real-time listener for dishes / menu catalog changes in Firestore
+ */
+export function listenToMenuCatalog(
+  onUpdate: (dishes: Product[]) => void,
+  onError?: (error: Error) => void
+) {
+  if (!firestoreDb) {
+    if (onError) onError(new Error("Firestore not initialized"));
+    return () => {};
+  }
+
+  try {
+    const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+    const unsubscribe = onSnapshot(
+      catalogDocRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (Array.isArray(data.dishes) && data.dishes.length > 0) {
+            onUpdate(data.dishes);
+          }
+        }
+      },
+      (err) => {
+        if (err.code === 'unavailable' || err.message?.includes('unavailable')) return;
+        console.warn("Dishes catalog listener note:", err);
+        if (onError) onError(err);
+      }
+    );
+    return unsubscribe;
+  } catch (err: any) {
+    if (onError) onError(err);
+    return () => {};
+  }
+}
+
+/**
+ * Synchronize dishes across:
+ * 1. Firebase Firestore (orders/barozza_menu_catalog)
+ * 2. LocalStorage (barozza_cafe_dishes) for customer website
+ * 3. BroadcastChannels (barozza_cafe_dishes & barozza_menu_sync)
+ * 4. Cross-window postMessage
+ */
+export async function syncDishesToFirestoreAndStore(products: Product[]): Promise<void> {
+  const customerDishes = products.map((p, idx) => {
+    let dishIdStr = p.dishId;
+    if (!dishIdStr) {
+      const match = p.sku.match(/\d+/) || p.id.match(/\d+/);
+      dishIdStr = match ? String(parseInt(match[0], 10)) : String(idx + 1);
+    }
+    return {
+      id: dishIdStr,
+      name: p.name,
+      price: Number(p.price),
+      image: p.imageUrl || "/images/frenchh.png",
+      description: p.description || `${p.name} freshly prepared at The Barozza Cafe.`,
+      category: p.category || "General",
+      available: p.status !== 'out_of_stock' && p.stock > 0
+    };
+  });
+
+  // 1. Write to localStorage for instant customer storefront reflection
+  try {
+    localStorage.setItem("barozza_cafe_dishes", JSON.stringify(customerDishes));
+    localStorage.setItem("barozza_admin_products", JSON.stringify(products));
+  } catch (e) {
+    console.warn("Failed to write dishes to localStorage:", e);
+  }
+
+  // 2. Broadcast across tabs and windows
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc1 = new BroadcastChannel("barozza_cafe_dishes");
+      bc1.postMessage({ type: 'DISHES_UPDATED', dishes: customerDishes, products });
+      bc1.close();
+
+      const bc2 = new BroadcastChannel("barozza_menu_sync");
+      bc2.postMessage({ type: 'DISHES_UPDATED', dishes: customerDishes, products });
+      bc2.close();
+    }
+  } catch (e) {
+    //
+  }
+
+  // 3. PostMessage to any listening frames / tabs
+  try {
+    window.postMessage({ type: 'BAROZZA_DISHES_UPDATED', dishes: customerDishes }, '*');
+  } catch (e) {
+    //
+  }
+
+  // 4. Update Firestore doc orders/barozza_menu_catalog
+  try {
+    if (firestoreDb) {
+      const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+      await setDoc(catalogDocRef, {
+        isCatalog: true,
+        type: 'menu_catalog',
+        storeName: 'The Barozza Cafe',
+        lastUpdated: new Date().toISOString(),
+        dishes: products,
+        customerDishes,
+        totalDishes: products.length
+      }, { merge: true });
+    }
+  } catch (err) {
+    console.warn("Failed to sync dishes catalog to Firestore:", err);
+  }
+}
+
+/**
+ * Listen to live catalog updates in Firestore so dishes and prices stay in sync with customer dashboard
+ */
+export function listenToCatalogDishes(
+  onUpdate: (dishes: any[]) => void
+): () => void {
+  if (!firestoreDb) return () => {};
+  try {
+    const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+    const unsub = onSnapshot(catalogDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const list = data.dishes || data.customerDishes;
+        if (Array.isArray(list) && list.length > 0) {
+          onUpdate(list);
+        }
+      }
+    }, (err) => {
+      if (err.code === 'unavailable' || err.message?.includes('unavailable')) return;
+      console.warn("Catalog listener notice:", err?.message || err);
+    });
+    return unsub;
+  } catch (err) {
+    console.warn("Catalog listener init notice:", err);
+    return () => {};
+  }
+}
+

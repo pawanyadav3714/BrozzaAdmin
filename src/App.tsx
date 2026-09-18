@@ -6,7 +6,11 @@ import {
   updateRTDBOrderStatus,
   FirebaseConnectionStatus,
   firebaseConfig,
-  pushOrderToFirestore
+  pushOrderToFirestore,
+  listenToMenuCatalog,
+  syncDishesToFirestoreAndStore,
+  realtimeDb,
+  normalizeOrderData
 } from './services/firebase';
 import { Order, OrderStatus, Product, SupportTicket, SyncLog, ApiSyncConfig, TicketStatus, TicketPriority } from './types';
 import { 
@@ -33,15 +37,35 @@ export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'orders' | 'analytics' | 'inventory' | 'support' | 'api-sync'>('orders');
 
-  // Core Data States
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  // Core Data States - Starts empty so ONLY authentic customer dashboard parcels are received
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const cached = localStorage.getItem("barozza_admin_products");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((p: any) => ({
+            ...p,
+            syncedWithExternalStore: true,
+            lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
+          }));
+        }
+      }
+    } catch (e) {}
+    return INITIAL_PRODUCTS.map(p => ({
+      ...p,
+      syncedWithExternalStore: true,
+      lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
+    }));
+  });
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [apiConfig, setApiConfig] = useState<ApiSyncConfig>(INITIAL_API_CONFIG);
 
   // Settings & Status
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [collectionName, setCollectionName] = useState<string>('orders');
   const [rtdbPath, setRtdbPath] = useState<string>('orders');
   const [firebaseStatus, setFirebaseStatus] = useState<FirebaseConnectionStatus>({
@@ -71,54 +95,91 @@ export default function App() {
   };
 
   // Ref to track known order IDs to prevent repeat chimes
-  const knownOrderIdsRef = useRef<Set<string>>(new Set(INITIAL_ORDERS.map(o => o.id)));
+  const knownOrderIdsRef = useRef<Set<string>>(new Set());
+  const isInitialLoadRef = useRef<boolean>(true);
 
   // Setup Firebase Real-time Listeners
   useEffect(() => {
     let unsubscribeFirestore = () => {};
     let unsubscribeRTDB = () => {};
+    let bcOrders1: BroadcastChannel | null = null;
+    let bcOrders2: BroadcastChannel | null = null;
+
+    const handleInboundCustomerOrder = (rawOrder: any) => {
+      if (!rawOrder) return;
+      if (
+        rawOrder.id === 'ord-cod-01' || 
+        rawOrder.id === 'ord-upi-02' || 
+        rawOrder.orderNumber === 'ORD-9821' || 
+        rawOrder.orderNumber === 'ORD-9822'
+      ) {
+        return;
+      }
+      try {
+        const orderId = rawOrder.id || `ord_cust_${Date.now()}`;
+        const normalized = normalizeOrderData(orderId, rawOrder);
+        setOrders(prev => {
+          const exists = prev.some(o => o.id === normalized.id || o.orderNumber === normalized.orderNumber);
+          if (exists) {
+            return prev.map(o => (o.id === normalized.id || o.orderNumber === normalized.orderNumber) ? normalized : o);
+          }
+          if (soundEnabled) {
+            playOrderNotificationChime();
+            showToast("Customer Parcel Received!", `Customer parcel #${normalized.orderNumber} received directly from customer dashboard`, 'success');
+          }
+          return [normalized, ...prev];
+        });
+      } catch (e) {
+        console.warn("Could not process inbound customer order:", e);
+      }
+    };
 
     try {
-      // 1. Listen to Firestore
+      // 1. Listen to Firestore - ONLY genuine customer dashboard orders
       unsubscribeFirestore = listenToFirestoreOrders(
         collectionName,
         (firebaseOrders) => {
-          if (firebaseOrders.length > 0) {
-            setOrders(prev => {
-              // Check for new orders
-              let hasNewIncoming = false;
-              firebaseOrders.forEach(fo => {
-                if (!knownOrderIdsRef.current.has(fo.id)) {
-                  hasNewIncoming = true;
-                  knownOrderIdsRef.current.add(fo.id);
-                }
-              });
+          // Strictly filter only real customer parcels from customer dashboard (exclude any dummy / mock test IDs)
+          const customerOrders = firebaseOrders.filter(
+            fo => fo.id !== 'ord-cod-01' && 
+                  fo.id !== 'ord-upi-02' && 
+                  fo.orderNumber !== 'ORD-9821' && 
+                  fo.orderNumber !== 'ORD-9822'
+          );
 
-              if (hasNewIncoming && soundEnabled) {
-                playOrderNotificationChime();
-                showToast("New Order Received!", `Incoming live order from Firebase [${firebaseOrders[0]?.orderNumber}]`, 'success');
+          setOrders(customerOrders);
+
+          if (isInitialLoadRef.current) {
+            isInitialLoadRef.current = false;
+            customerOrders.forEach(fo => knownOrderIdsRef.current.add(fo.id));
+          } else {
+            let hasNewIncoming = false;
+            customerOrders.forEach(fo => {
+              if (!knownOrderIdsRef.current.has(fo.id)) {
+                hasNewIncoming = true;
+                knownOrderIdsRef.current.add(fo.id);
               }
-
-              // Merge unique by ID
-              const map = new Map<string, Order>();
-              // Keep prior mock/local orders too
-              prev.forEach(o => map.set(o.id, o));
-              firebaseOrders.forEach(o => map.set(o.id, o));
-              return Array.from(map.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
             });
 
-            setFirebaseStatus(prev => ({
-              ...prev,
-              connected: true,
-              type: 'firestore',
-              lastPing: new Date().toISOString(),
-              activeCollection: collectionName,
-              errorMessage: undefined
-            }));
+            if (hasNewIncoming && soundEnabled && customerOrders.length > 0) {
+              playOrderNotificationChime();
+              showToast("Customer Parcel Received!", `Incoming customer parcel [${customerOrders[0]?.orderNumber || 'Live'}] from customer dashboard`, 'success');
+            }
           }
+
+          setFirebaseStatus(prev => ({
+            ...prev,
+            connected: true,
+            type: 'firestore',
+            lastPing: new Date().toISOString(),
+            activeCollection: collectionName,
+            errorMessage: undefined
+          }));
         },
         (err) => {
-          console.warn("Firestore listener note:", err.message);
+          if (err.message?.includes('unavailable')) {
+            return;
+          }
           setFirebaseStatus(prev => ({
             ...prev,
             errorMessage: `Firestore: ${err.message}`
@@ -126,54 +187,118 @@ export default function App() {
         }
       );
 
-      // 2. Listen to Realtime Database
-      unsubscribeRTDB = listenToRTDBOrders(
-        rtdbPath,
-        (rtdbOrders) => {
-          if (rtdbOrders.length > 0) {
-            setOrders(prev => {
-              let hasNewIncoming = false;
-              rtdbOrders.forEach(ro => {
-                if (!knownOrderIdsRef.current.has(ro.id)) {
-                  hasNewIncoming = true;
-                  knownOrderIdsRef.current.add(ro.id);
+      // 2. Listen to Realtime Database if configured
+      if (realtimeDb) {
+        unsubscribeRTDB = listenToRTDBOrders(
+          rtdbPath,
+          (rtdbOrders) => {
+            const customerRtdbOrders = rtdbOrders.filter(
+              ro => ro.id !== 'ord-cod-01' && 
+                    ro.id !== 'ord-upi-02' && 
+                    ro.orderNumber !== 'ORD-9821' && 
+                    ro.orderNumber !== 'ORD-9822'
+            );
+            if (customerRtdbOrders.length > 0) {
+              setOrders(prev => {
+                let hasNewIncoming = false;
+                customerRtdbOrders.forEach(ro => {
+                  if (!knownOrderIdsRef.current.has(ro.id)) {
+                    hasNewIncoming = true;
+                    knownOrderIdsRef.current.add(ro.id);
+                  }
+                });
+
+                if (hasNewIncoming && soundEnabled) {
+                  playOrderNotificationChime();
+                  showToast("New Customer Parcel Received!", `Incoming parcel from customer dashboard`, 'success');
                 }
+
+                const map = new Map<string, Order>();
+                prev.forEach(o => map.set(o.id, o));
+                customerRtdbOrders.forEach(o => map.set(o.id, o));
+                return Array.from(map.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
               });
 
-              if (hasNewIncoming && soundEnabled) {
-                playOrderNotificationChime();
-                showToast("New RTDB Order Received!", `Incoming stream order from Firebase RTDB`, 'success');
-              }
-
-              const map = new Map<string, Order>();
-              prev.forEach(o => map.set(o.id, o));
-              rtdbOrders.forEach(o => map.set(o.id, o));
-              return Array.from(map.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-            });
-
-            setFirebaseStatus(prev => ({
-              ...prev,
-              connected: true,
-              type: 'both',
-              lastPing: new Date().toISOString(),
-              activeCollection: `${collectionName} & /${rtdbPath}`,
-              errorMessage: undefined
-            }));
+              setFirebaseStatus(prev => ({
+                ...prev,
+                connected: true,
+                type: 'both',
+                lastPing: new Date().toISOString(),
+                activeCollection: `${collectionName} & /${rtdbPath}`,
+                errorMessage: undefined
+              }));
+            }
+          },
+          (err) => {
+            console.warn("RTDB listener note:", err.message);
           }
-        },
-        (err) => {
-          console.warn("RTDB listener note:", err.message);
+        );
+      }
+
+      // 3. Realtime listener for dishes / menu catalog
+      const unsubscribeCatalog = listenToMenuCatalog((catalogDishes) => {
+        if (catalogDishes && catalogDishes.length > 0) {
+          setProducts(prev => {
+            const map = new Map<string, Product>();
+            prev.forEach(p => map.set(p.sku || p.id, p));
+            catalogDishes.forEach(d => map.set(d.sku || d.id, d));
+            const merged = Array.from(map.values());
+            try {
+              localStorage.setItem("barozza_admin_products", JSON.stringify(merged));
+            } catch (e) {}
+            return merged;
+          });
         }
-      );
+      });
+
+      // 4. Cross-tab & BroadcastChannel listener for direct customer dashboard orders
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          bcOrders1 = new BroadcastChannel('barozza_orders');
+          bcOrders1.onmessage = (event) => {
+            if (event.data?.order) handleInboundCustomerOrder(event.data.order);
+            else if (event.data?.type === 'NEW_CUSTOMER_ORDER' && event.data?.payload) handleInboundCustomerOrder(event.data.payload);
+          };
+          bcOrders2 = new BroadcastChannel('customer_orders');
+          bcOrders2.onmessage = (event) => {
+            if (event.data?.order) handleInboundCustomerOrder(event.data.order);
+            else if (event.data?.type === 'NEW_CUSTOMER_ORDER' && event.data?.payload) handleInboundCustomerOrder(event.data.payload);
+          };
+        } catch (e) {}
+      }
+
+      const handleWindowMsg = (event: MessageEvent) => {
+        if (event.data?.type === 'NEW_CUSTOMER_ORDER' && event.data?.order) {
+          handleInboundCustomerOrder(event.data.order);
+        }
+      };
+      window.addEventListener('message', handleWindowMsg);
+
+      return () => {
+        unsubscribeFirestore();
+        unsubscribeRTDB();
+        unsubscribeCatalog();
+        if (bcOrders1) bcOrders1.close();
+        if (bcOrders2) bcOrders2.close();
+        window.removeEventListener('message', handleWindowMsg);
+      };
     } catch (e: any) {
       console.warn("Realtime listener init error:", e);
+      return () => {
+        unsubscribeFirestore();
+        unsubscribeRTDB();
+        if (bcOrders1) bcOrders1.close();
+        if (bcOrders2) bcOrders2.close();
+      };
     }
-
-    return () => {
-      unsubscribeFirestore();
-      unsubscribeRTDB();
-    };
   }, [collectionName, rtdbPath, soundEnabled]);
+
+  // Sync initial menu catalog to the active Firebase database
+  useEffect(() => {
+    if (products.length > 0) {
+      syncDishesToFirestoreAndStore(products).catch(() => {});
+    }
+  }, []);
 
   // Order Status Update
   const handleUpdateOrderStatus = async (orderId: string, status: OrderStatus, additionalFields?: Partial<Order>) => {
@@ -247,7 +372,7 @@ export default function App() {
         source: newOrder.source,
         status: 'success',
         statusCode: 200,
-        details: `Order ${newOrder.orderNumber} processed ($${newOrder.totalAmount.toFixed(2)})`,
+        details: `Order ${newOrder.orderNumber} processed (₹${newOrder.totalAmount.toFixed(2)})`,
         payload: { orderNumber: newOrder.orderNumber, total: newOrder.totalAmount }
       },
       ...prev
@@ -258,31 +383,33 @@ export default function App() {
   const handleUpdateStock = (productId: string, newStock: number) => {
     let updatedProduct: Product | undefined;
 
-    setProducts(prev => prev.map(p => {
+    const updatedList = products.map(p => {
       if (p.id === productId) {
         updatedProduct = {
           ...p,
           stock: newStock,
-          status: newStock === 0 ? 'out_of_stock' : newStock <= p.lowStockThreshold ? 'low_stock' : 'in_stock',
+          status: (newStock === 0 ? 'out_of_stock' : newStock <= p.lowStockThreshold ? 'low_stock' : 'in_stock') as Product['status'],
           lastSyncedAt: new Date().toISOString()
         };
         return updatedProduct;
       }
       return p;
-    }));
+    });
+
+    setProducts(updatedList);
+    syncDishesToFirestoreAndStore(updatedList);
 
     if (updatedProduct) {
-      // If auto-sync is on, record log
       if (apiConfig.autoSyncStock) {
         setSyncLogs(prev => [
           {
             id: `log_${Date.now()}`,
             timestamp: new Date().toISOString(),
             type: 'stock.push',
-            source: 'OmniStore Auto-Sync',
+            source: 'Live Storefront Sync Engine',
             status: 'success',
             statusCode: 200,
-            details: `Pushed updated stock for ${updatedProduct?.sku} (${newStock} units) to ${apiConfig.partnerStoreUrl}`,
+            details: `Updated inventory for ${updatedProduct?.name} (${newStock} units) — synced to ${apiConfig.partnerStoreUrl}`,
             payload: { sku: updatedProduct?.sku, stock: newStock }
           },
           ...prev
@@ -291,37 +418,66 @@ export default function App() {
     }
   };
 
-  // Save product from modal
-  const handleSaveProduct = (productData: Partial<Product>) => {
+  // Save dish / product from modal
+  const handleSaveProduct = async (productData: Partial<Product>) => {
+    let updatedProducts: Product[] = [];
     if (productData.id) {
       // Edit
-      setProducts(prev => prev.map(p => p.id === productData.id ? { ...p, ...productData } as Product : p));
-      showToast("Product Updated", `Catalog record ${productData.name} updated.`);
+      updatedProducts = products.map(p => p.id === productData.id ? { 
+        ...p, 
+        ...productData,
+        syncedWithExternalStore: true,
+        lastSyncedAt: new Date().toISOString()
+      } as Product : p);
+      setProducts(updatedProducts);
+      showToast("Dish & Price Updated", `Catalog record "${productData.name}" (₹${Number(productData.price)}) updated and synced with customer website!`);
     } else {
-      // Add
+      // Add new dish
+      const dishCount = products.filter(p => p.sku?.startsWith('BRZ-DISH')).length + 1;
       const newProd: Product = {
         id: `prod_${Date.now()}`,
-        sku: productData.sku || `SKU-${Date.now().toString().slice(-4)}`,
-        name: productData.name || 'New Store Product',
-        category: productData.category || 'General',
-        price: Number(productData.price || 49.99),
-        costPrice: Number(productData.costPrice || 25.00),
-        stock: Number(productData.stock || 20),
-        lowStockThreshold: Number(productData.lowStockThreshold || 5),
-        status: (Number(productData.stock || 20) <= Number(productData.lowStockThreshold || 5)) ? 'low_stock' : 'in_stock',
-        syncedWithExternalStore: productData.syncedWithExternalStore ?? true,
+        dishId: String(products.length + 1),
+        sku: productData.sku || `BRZ-DISH-${String(dishCount).padStart(2, '0')}`,
+        name: productData.name || 'New Cafe Dish',
+        category: productData.category || 'Starters',
+        price: Number(productData.price || 40.00),
+        costPrice: Number(productData.costPrice || 20.00),
+        stock: Number(productData.stock ?? 25),
+        lowStockThreshold: Number(productData.lowStockThreshold ?? 5),
+        status: (Number(productData.stock ?? 25) <= Number(productData.lowStockThreshold ?? 5)) ? 'low_stock' : 'in_stock',
+        syncedWithExternalStore: true,
         lastSyncedAt: new Date().toISOString(),
-        imageUrl: productData.imageUrl
+        imageUrl: productData.imageUrl || 'https://brozza.vercel.app/images/frenchh.png',
+        description: productData.description || `${productData.name || 'Dish'} prepared fresh at The Barozza Cafe.`
       };
-      setProducts(prev => [newProd, ...prev]);
-      showToast("Product Created", `${newProd.name} added to catalog.`);
+      updatedProducts = [newProd, ...products];
+      setProducts(updatedProducts);
+      showToast("Dish Added to Catalog", `"${newProd.name}" (₹${newProd.price}) added and pushed to customer website!`);
     }
+
+    // Sync to Firestore doc orders/barozza_menu_catalog & customer site
+    await syncDishesToFirestoreAndStore(updatedProducts);
+
+    setSyncLogs(prev => [
+      {
+        id: `log_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        type: 'stock.push',
+        source: 'Live Customer Website Sync',
+        status: 'success',
+        statusCode: 200,
+        details: `Synced dish [${productData.name}] (₹${productData.price}) with ${apiConfig.partnerStoreUrl} and Firestore`,
+        payload: { name: productData.name, price: productData.price, category: productData.category, syncedWithCustomerSite: true }
+      },
+      ...prev
+    ]);
   };
 
-  // Batch sync all stock to partner API
+  // Batch sync all dishes and stock to partner API & customer site
   const handleSyncAllStock = async () => {
     setIsSyncingStock(true);
-    await new Promise(r => setTimeout(r, 1000));
+    await syncDishesToFirestoreAndStore(products);
+    await new Promise(r => setTimeout(r, 600));
     setIsSyncingStock(false);
 
     setProducts(prev => prev.map(p => ({
@@ -335,16 +491,31 @@ export default function App() {
         id: `log_${Date.now()}`,
         timestamp: new Date().toISOString(),
         type: 'stock.push',
-        source: 'Batch Inventory Sync Engine',
+        source: 'Full Catalog & Price Sync',
         status: 'success',
         statusCode: 200,
-        details: `Successfully pushed warehouse inventory reconciliation (${products.length} SKUs) to ${apiConfig.partnerStoreUrl}`,
+        details: `Successfully pushed entire dishes catalog (${products.length} items) & updated prices to ${apiConfig.partnerStoreUrl}`,
         payload: { syncedCount: products.length, timestamp: new Date().toISOString() }
       },
       ...prev
     ]);
 
-    showToast("Stock Synchronized", `Successfully pushed all inventory levels to ${apiConfig.partnerStoreUrl}`, 'success');
+    showToast("Dishes Synchronized", `Successfully synced ${products.length} dishes & prices with ${apiConfig.partnerStoreUrl}`, 'success');
+  };
+
+  // Quick price update from inventory table
+  const handleQuickUpdatePrice = async (productId: string, newPrice: number) => {
+    let updatedProd: Product | undefined;
+    const updatedProducts = products.map(p => {
+      if (p.id === productId) {
+        updatedProd = { ...p, price: newPrice, lastSyncedAt: new Date().toISOString() };
+        return updatedProd;
+      }
+      return p;
+    });
+    setProducts(updatedProducts);
+    await syncDishesToFirestoreAndStore(updatedProducts);
+    showToast("Dish Price Updated", `Updated ${updatedProd?.name || 'Dish'} price to ₹${newPrice} — synced with customer storefront!`, 'success');
   };
 
   // Support ticket actions
@@ -514,14 +685,14 @@ export default function App() {
     setIsSyncing(true);
     await new Promise(r => setTimeout(r, 700));
     setIsSyncing(false);
-    showToast("Synced with Firebase", "Live order stream verified with commanding-palisade-58gvj", 'info');
+    showToast("Synced with Firebase", "Live customer order stream verified with brozza-1f6be", 'info');
   };
 
   const openTicketsCount = tickets.filter(t => t.status === 'open' || t.status === 'in_progress').length;
   const lowStockCount = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold).length;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-white text-slate-900'} flex flex-col font-sans selection:bg-indigo-500 selection:text-white`}>
       {/* Global Header */}
       <Header
         activeTab={activeTab}
@@ -532,10 +703,10 @@ export default function App() {
         firebaseStatus={firebaseStatus}
         soundEnabled={soundEnabled}
         setSoundEnabled={setSoundEnabled}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
         onOpenFirebaseModal={() => setIsFirebaseModalOpen(true)}
         onOpenNewOrderModal={() => setIsNewOrderModalOpen(true)}
-        isSyncing={isSyncing}
-        onTriggerSync={handleTriggerSync}
       />
 
       {/* Main Content Area */}
@@ -543,6 +714,7 @@ export default function App() {
         {activeTab === 'orders' && (
           <OrdersView
             orders={orders}
+            isDarkMode={isDarkMode}
             onSelectOrder={(ord) => setSelectedOrder(ord)}
             onUpdateStatus={handleUpdateOrderStatus}
             onCreateSupportTicket={handleCreateTicketFromOrder}
@@ -568,6 +740,8 @@ export default function App() {
             }}
             onSyncAllStock={handleSyncAllStock}
             isSyncingStock={isSyncingStock}
+            partnerStoreUrl={apiConfig.partnerStoreUrl}
+            onQuickUpdatePrice={handleQuickUpdatePrice}
           />
         )}
 
@@ -600,7 +774,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-400">OmniStore Commerce Cloud</span>
             <span>•</span>
-            <span className="font-mono text-emerald-400">Firebase: gecp-c23ad (RTDB & Firestore Active)</span>
+            <span className="font-mono text-emerald-400">Firebase: brozza-1f6be (Firestore Active)</span>
           </div>
           <div>
             REST API v1 Secured • Multi-Channel Logistics Engine

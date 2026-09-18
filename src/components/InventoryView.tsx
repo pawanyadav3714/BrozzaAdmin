@@ -12,7 +12,13 @@ import {
   DollarSign, 
   TrendingUp, 
   ArrowUpDown,
-  ExternalLink
+  ExternalLink,
+  Globe,
+  Store,
+  Check,
+  Eye,
+  X,
+  Sparkles
 } from 'lucide-react';
 import { Product } from '../types';
 
@@ -22,6 +28,8 @@ interface InventoryViewProps {
   onOpenEditModal: (product: Product | null) => void;
   onSyncAllStock: () => Promise<void>;
   isSyncingStock: boolean;
+  partnerStoreUrl?: string;
+  onQuickUpdatePrice?: (productId: string, newPrice: number) => void;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
@@ -29,11 +37,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   onUpdateStock,
   onOpenEditModal,
   onSyncAllStock,
-  isSyncingStock
+  isSyncingStock,
+  partnerStoreUrl = 'https://brozza.vercel.app',
+  onQuickUpdatePrice
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+  const [tempPrice, setTempPrice] = useState<string>('');
+  const [showStorePreview, setShowStorePreview] = useState(false);
 
   // Categories list
   const categories = useMemo(() => {
@@ -58,8 +71,72 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const lowStockItems = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold);
   const outOfStockItems = products.filter(p => p.stock === 0 || p.status === 'out_of_stock');
 
+  const handleStartEditPrice = (prod: Product) => {
+    setEditingPriceId(prod.id);
+    setTempPrice(prod.price.toString());
+  };
+
+  const handleSaveQuickPrice = (productId: string) => {
+    const num = parseFloat(tempPrice);
+    if (!isNaN(num) && num >= 0) {
+      if (onQuickUpdatePrice) {
+        onQuickUpdatePrice(productId, num);
+      }
+    }
+    setEditingPriceId(null);
+  };
+
   return (
     <div className="space-y-6">
+      {/* Live Customer Storefront Sync Banner */}
+      <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950/70 via-slate-900 to-purple-950/70 border border-indigo-500/30 flex flex-wrap items-center justify-between gap-4 shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shrink-0 shadow-inner">
+            <Store className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-white tracking-wide">Customer Storefront & Dishes Sync Active</h2>
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-semibold text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live 2-Way Sync
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Connected to <strong className="text-indigo-300 font-mono">{partnerStoreUrl}</strong> & Firestore Catalog. Any dish additions or price edits here reflect on the customer website automatically.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowStorePreview(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-200 text-xs font-semibold border border-indigo-700/50 transition shadow-sm cursor-pointer"
+          >
+            <Eye className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Preview Customer Website</span>
+          </button>
+          <a
+            href={partnerStoreUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow-sm"
+          >
+            <Globe className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Open Customer Site</span>
+            <ExternalLink className="w-3 h-3 text-slate-400" />
+          </a>
+          <button
+            onClick={onSyncAllStock}
+            disabled={isSyncingStock}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingStock ? 'animate-spin' : ''}`} />
+            <span>{isSyncingStock ? 'Syncing...' : 'Push All to Customer Site'}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Top Metrics Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
@@ -82,11 +159,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
         <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Inventory Asset Value</span>
-            <DollarSign className="w-4 h-4 text-cyan-400" />
+            <span>Menu Valuation</span>
+            <span className="text-sm font-bold text-emerald-400">₹</span>
           </div>
-          <p className="text-2xl font-bold text-white font-mono">${totalCatalogValue.toFixed(0)}</p>
-          <p className="text-[11px] text-slate-400 mt-1">Estimated retail valuation</p>
+          <p className="text-2xl font-bold text-emerald-300 font-mono">₹{totalCatalogValue.toLocaleString('en-IN')}</p>
+          <p className="text-[11px] text-slate-400 mt-1">Estimated catalog valuation</p>
         </div>
 
         <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
@@ -199,19 +276,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-slate-950/80 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
               <tr>
-                <th className="py-3 px-4">Product & SKU</th>
+                <th className="py-3 px-4">Dish / Menu Item</th>
                 <th className="py-3 px-4">Category</th>
-                <th className="py-3 px-4">Pricing & Margin</th>
-                <th className="py-3 px-4">Stock Level (Quick Edit)</th>
-                <th className="py-3 px-4">Inventory Status</th>
-                <th className="py-3 px-4">Partner Store Sync</th>
+                <th className="py-3 px-4">Price (₹ INR) & Margin</th>
                 <th className="py-3 px-4 text-right">Edit</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80 text-slate-300">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                  <td colSpan={4} className="py-12 text-center text-slate-400">
                     <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
                     <p className="font-semibold text-slate-300">No products matched filter</p>
                   </td>
@@ -224,14 +298,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
                   return (
                     <tr key={prod.id} className="hover:bg-slate-800/40 transition">
-                      {/* Product Name & SKU */}
+                      {/* Product Name (Customer Site Live Sync) */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-3">
                           {prod.imageUrl ? (
                             <img
                               src={prod.imageUrl}
                               alt={prod.name}
-                              className="w-10 h-10 object-cover rounded-lg border border-slate-700 shrink-0"
+                              className="w-10 h-10 object-cover rounded-lg border border-slate-700 shrink-0 bg-slate-900"
                               referrerPolicy="no-referrer"
                             />
                           ) : (
@@ -240,8 +314,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             </div>
                           )}
                           <div>
-                            <div className="font-bold text-white max-w-[220px] truncate">{prod.name}</div>
-                            <div className="text-[11px] font-mono text-indigo-400">SKU: {prod.sku}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-white max-w-[220px] truncate capitalize">{prod.name}</span>
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+                                <Globe className="w-2.5 h-2.5 text-emerald-400" />
+                                Live on Customer Site
+                              </span>
+                            </div>
+                            {prod.description && (
+                              <div className="text-[10px] text-slate-400 max-w-[240px] truncate mt-0.5" title={prod.description}>
+                                {prod.description}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -253,89 +337,64 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         </span>
                       </td>
 
-                      {/* Price & Margin */}
+                      {/* Price & Margin (Pure Indian Rupees ₹) */}
                       <td className="py-3.5 px-4">
-                        <div className="font-bold text-white font-mono">${prod.price.toFixed(2)}</div>
-                        <div className="text-[10px] text-slate-400">
-                          Cost: ${prod.costPrice.toFixed(2)}{' '}
-                          <span className="text-emerald-400 font-semibold">({marginPercent}% margin)</span>
-                        </div>
-                      </td>
-
-                      {/* Stock Level Quick Edit */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center rounded-lg border border-slate-700 bg-slate-950">
+                        {editingPriceId === prod.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-emerald-400 font-bold font-mono text-sm">₹</span>
+                            <input
+                              type="number"
+                              step="1"
+                              value={tempPrice}
+                              onChange={(e) => setTempPrice(e.target.value)}
+                              className="w-20 bg-slate-950 border border-emerald-500 rounded px-2 py-1 text-white font-mono text-sm font-bold focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              autoFocus
+                              placeholder="Rupees"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveQuickPrice(prod.id);
+                                if (e.key === 'Escape') setEditingPriceId(null);
+                              }}
+                            />
                             <button
-                              onClick={() => onUpdateStock(prod.id, Math.max(0, prod.stock - 1))}
-                              className="px-2.5 py-1 text-slate-400 hover:text-white hover:bg-slate-800 transition rounded-l"
-                              title="Decrease stock by 1"
+                              onClick={() => handleSaveQuickPrice(prod.id)}
+                              className="p-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-sm transition"
+                              title="Save Price in Rupees (₹)"
                             >
-                              -
-                            </button>
-                            <span className={`px-3 font-mono font-bold text-sm ${
-                              isOut ? 'text-rose-400' : isLow ? 'text-amber-400' : 'text-white'
-                            }`}>
-                              {prod.stock}
-                            </span>
-                            <button
-                              onClick={() => onUpdateStock(prod.id, prod.stock + 1)}
-                              className="px-2.5 py-1 text-slate-400 hover:text-white hover:bg-slate-800 transition rounded-r"
-                              title="Increase stock by 1"
-                            >
-                              +
+                              <Check className="w-3.5 h-3.5" />
                             </button>
                           </div>
-                          <span className="text-[10px] text-slate-500 font-mono">
-                            (Min: {prod.lowStockThreshold})
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Status */}
-                      <td className="py-3.5 px-4">
-                        {isOut ? (
-                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                            Out of Stock
-                          </span>
-                        ) : isLow ? (
-                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                            Low Stock Alert
-                          </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                            In Stock
-                          </span>
+                          <div className="group/price flex items-center gap-2">
+                            <div>
+                              <div className="font-bold text-emerald-400 font-mono text-base flex items-center gap-0.5">
+                                <span>₹</span>
+                                <span>{prod.price}</span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleStartEditPrice(prod)}
+                              className="opacity-0 group-hover/price:opacity-100 p-1 text-slate-400 hover:text-emerald-300 transition cursor-pointer"
+                              title="Quick Edit Price (₹)"
+                            >
+                              <Edit className="w-3 h-3" />
+                            </button>
+                          </div>
                         )}
                       </td>
 
-                      {/* Partner Store Sync */}
-                      <td className="py-3.5 px-4">
-                        {prod.syncedWithExternalStore ? (
-                          <div className="space-y-0.5">
-                            <span className="inline-flex items-center gap-1 text-[11px] text-purple-300 font-medium">
-                              <CheckCircle2 className="w-3 h-3 text-purple-400" />
-                              Synced with API
-                            </span>
-                            {prod.lastSyncedAt && (
-                              <p className="text-[10px] text-slate-500 font-mono">
-                                {new Date(prod.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-slate-500">Local Only</span>
-                        )}
-                      </td>
+
+
+
 
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
                         <button
                           onClick={() => onOpenEditModal(prod)}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                          title="Edit Product & Thresholds"
+                          className="flex items-center gap-1.5 ml-auto px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-300 transition text-xs font-semibold cursor-pointer"
+                          title="Edit Dish, Price, Photo & Thresholds"
                         >
-                          <Edit className="w-4 h-4" />
+                          <Edit className="w-3.5 h-3.5" />
+                          <span>Edit Dish</span>
                         </button>
                       </td>
                     </tr>
@@ -351,6 +410,102 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <span className="text-slate-400">Warehouse ID: <strong className="text-slate-200 font-mono">WH-NORTH-01</strong></span>
         </div>
       </div>
+
+      {/* Customer Website Live Storefront Preview & Sync Modal */}
+      {showStorePreview && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-5xl h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white">Customer Website Live Preview & Catalog Sync</h3>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      Live Connected
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Viewing customer storefront (<span className="text-indigo-300 font-mono">{partnerStoreUrl}</span>) with Firestore menu catalog synchronization
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onSyncAllStock}
+                  disabled={isSyncingStock}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition shadow-sm cursor-pointer"
+                  title="Push latest dishes & prices to customer site"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingStock ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingStock ? 'Pushing...' : 'Re-sync All Dishes'}</span>
+                </button>
+                <a
+                  href={partnerStoreUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+                  title="Open storefront in a new browser tab"
+                >
+                  <span>Open in New Tab</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                </a>
+                <button
+                  onClick={() => setShowStorePreview(false)}
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                  title="Close Preview"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Catalog Synced Dishes Strip */}
+            <div className="px-4 py-2.5 bg-slate-950/40 border-b border-slate-800/80 flex items-center justify-between text-xs overflow-x-auto shrink-0 gap-4">
+              <div className="flex items-center gap-2 text-slate-300">
+                <span className="font-semibold text-white">Active Synced Catalog:</span>
+                <span className="text-slate-400">{products.length} dishes live in Firestore doc <code className="text-indigo-300 font-mono text-[11px]">orders/barozza_menu_catalog</code></span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {products.slice(0, 6).map((p) => (
+                  <span key={p.id} className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700 whitespace-nowrap">
+                    {p.name} (₹{p.price})
+                  </span>
+                ))}
+                {products.length > 6 && (
+                  <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">+{products.length - 6} more</span>
+                )}
+              </div>
+            </div>
+
+            {/* Live Storefront Iframe */}
+            <div className="flex-1 w-full bg-slate-950 relative">
+              <iframe
+                src={partnerStoreUrl}
+                title="Customer Storefront Live View"
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              />
+            </div>
+
+            {/* Footer Status */}
+            <div className="px-4 py-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-emerald-300 font-medium">Automatic bi-directional synchronization active</span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                All newly created dishes from the admin dashboard are instantly registered and sent to the customer site.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

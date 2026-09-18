@@ -22,6 +22,7 @@ import {
   QrCode
 } from 'lucide-react';
 import { ApiSyncConfig, SyncLog, Order, Product } from '../types';
+import { firebaseConfig } from '../services/firebase';
 
 interface ApiSyncViewProps {
   apiConfig: ApiSyncConfig;
@@ -67,7 +68,7 @@ export const ApiSyncView: React.FC<ApiSyncViewProps> = ({
     setIsPinging(false);
     setPingResult({
       status: 'ok',
-      message: `200 OK — Connected to Firebase Project (commanding-palisade-58gvj). Ready to sync with customer storefront.`
+      message: `200 OK — Connected to Firebase Project (brozza-1f6be). Ready to sync with customer storefront.`
     });
   };
 
@@ -124,18 +125,10 @@ export const ApiSyncView: React.FC<ApiSyncViewProps> = ({
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, onSnapshot, doc } from 'firebase/firestore';
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAO_1T-8vlvcTRGd1X88Rs26_gqA85tI4Y",
-  authDomain: "commanding-palisade-58gvj.firebaseapp.com",
-  projectId: "commanding-palisade-58gvj",
-  storageBucket: "commanding-palisade-58gvj.firebasestorage.app",
-  messagingSenderId: "749088653483",
-  appId: "1:749088653483:web:196293fd4a7678ec2e37ee"
-};
+const firebaseConfig = ${JSON.stringify(firebaseConfig, null, 2)};
 
 const app = initializeApp(firebaseConfig);
-// Connect to the specific database instance:
-const db = getFirestore(app, "ai-studio-remixthebarozzac-0a0443a4-c36c-4a75-b9f6-4c49d5a7fd1d");
+const db = getFirestore(app);
 
 // 1. PLACE CUSTOMER ORDER (Calls when customer clicks "Checkout")
 export async function placeCustomerOrder(cartData) {
@@ -186,7 +179,7 @@ app.post('/api/v1/orders', async (req, res) => {
   res.status(201).json({ status: "success", message: "Order dispatched to worker" });
 });`;
 
-  const curlCode = `curl -X POST "https://commanding-palisade-58gvj.firebaseio.com/orders.json" \\
+  const curlCode = `curl -X POST "https://brozza-1f6be.firebaseio.com/orders.json" \\
   -H "Content-Type: application/json" \\
   -d '{
     "orderNumber": "ORD-58291",
@@ -219,7 +212,7 @@ app.post('/api/v1/orders', async (req, res) => {
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Target Project: <strong className="text-slate-200">commanding-palisade-58gvj</strong> • Database: <strong className="text-slate-200">ai-studio-remixthebarozzac-0a0443a4-c36c-4a75-b9f6-4c49d5a7fd1d</strong>
+                Target Project: <strong className="text-slate-200">brozza-1f6be</strong> • Storefront: <strong className="text-slate-200">brozza.vercel.app</strong>
               </p>
             </div>
           </div>

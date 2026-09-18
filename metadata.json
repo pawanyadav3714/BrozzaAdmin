@@ -1,5 +1,5 @@
 {
-  "name": "OmniStore Commerce Admin",
+  "name": "The Brozza - Admin (Rohit's)",
   "description": "Real-time e-commerce worker & admin dashboard with Firebase live order sync between customer storefront and parcel reception console, supporting Cash on Delivery (COD), UPI payments, and order fulfillment stages.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

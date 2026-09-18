@@ -142,7 +142,7 @@ export const FirebaseDiagnosticModal: React.FC<FirebaseDiagnosticModalProps> = (
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Project: <span className="text-indigo-300 font-mono">commanding-palisade-58gvj</span>
+                Project: <span className="text-indigo-300 font-mono">brozza-1f6be</span> (Customer Dashboard: <span className="text-emerald-400">brozza.vercel.app</span>)
               </p>
             </div>
           </div>

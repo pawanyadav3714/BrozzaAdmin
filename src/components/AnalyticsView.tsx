@@ -165,8 +165,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold font-mono text-white">
-              ${totalRevenue.toFixed(2)}
+            <span className="text-2xl sm:text-3xl font-bold font-mono text-emerald-400">
+              ₹{totalRevenue.toFixed(2)}
             </span>
             <span className="text-xs text-emerald-400 font-semibold flex items-center">
               <ArrowUpRight className="w-3 h-3" /> +14.2%
@@ -203,8 +203,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold font-mono text-white">
-              ${averageOrderValue.toFixed(2)}
+            <span className="text-2xl sm:text-3xl font-bold font-mono text-emerald-400">
+              ₹{averageOrderValue.toFixed(2)}
             </span>
             <span className="text-xs text-emerald-400 font-semibold flex items-center">
               <ArrowUpRight className="w-3 h-3" /> +5.1%
@@ -248,7 +248,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <div className="flex items-center gap-3 text-xs">
               <span className="flex items-center gap-1.5 text-slate-300">
                 <span className="w-2.5 h-2.5 rounded-sm bg-indigo-500"></span>
-                Daily Revenue ($)
+                Daily Revenue (₹)
               </span>
             </div>
           </div>
@@ -264,7 +264,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                   <div key={idx} className="flex-1 flex flex-col items-center gap-2 h-full justify-end group">
                     {/* Tooltip on hover */}
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-mono bg-slate-950 border border-slate-700 px-2 py-1 rounded text-white shadow pointer-events-none whitespace-nowrap">
-                      ${item.revenue.toFixed(0)} ({item.orders} ords)
+                      ₹{item.revenue.toFixed(0)} ({item.orders} ords)
                     </div>
 
                     {/* Bar */}
@@ -273,7 +273,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                       className="w-full max-w-[48px] rounded-t-lg bg-gradient-to-t from-indigo-700 to-indigo-500 group-hover:from-indigo-600 group-hover:to-indigo-400 transition-all shadow-md relative"
                     >
                       <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-mono text-slate-300 hidden sm:block">
-                        ${item.revenue.toFixed(0)}
+                        ₹{item.revenue.toFixed(0)}
                       </div>
                     </div>
 
@@ -346,7 +346,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                     <div className="flex justify-between text-xs">
                       <span className="text-slate-200 font-medium">{cat}</span>
                       <span className="font-mono text-white font-bold">
-                        ${val.revenue.toFixed(2)}{' '}
+                        ₹{val.revenue.toFixed(2)}{' '}
                         <span className="text-slate-400 font-normal">({val.units} units)</span>
                       </span>
                     </div>
@@ -389,12 +389,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                     )}
                     <div>
                       <p className="text-xs font-semibold text-white truncate max-w-[200px]">{p.name}</p>
-                      <p className="text-[10px] text-slate-400 font-mono">SKU: {p.sku}</p>
                     </div>
                   </div>
 
                   <div className="text-right text-xs">
-                    <p className="font-bold text-white font-mono">${p.revenue.toFixed(2)}</p>
+                    <p className="font-bold text-white font-mono">₹{p.revenue.toFixed(2)}</p>
                     <p className="text-[11px] text-emerald-400 font-medium">{p.units} units sold</p>
                   </div>
                 </div>

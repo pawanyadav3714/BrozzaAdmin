@@ -63,6 +63,9 @@ export interface Product {
   syncedWithExternalStore: boolean;
   lastSyncedAt?: string;
   imageUrl?: string;
+  description?: string;
+  dishId?: string;
+  available?: boolean;
 }
 
 export type TicketPriority = 'urgent' | 'high' | 'medium' | 'low';
