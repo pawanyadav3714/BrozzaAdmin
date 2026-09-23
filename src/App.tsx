@@ -7,35 +7,55 @@ import {
   FirebaseConnectionStatus,
   firebaseConfig,
   pushOrderToFirestore,
+  deleteOrderDocument,
   listenToMenuCatalog,
   syncDishesToFirestoreAndStore,
   realtimeDb,
-  normalizeOrderData
+  normalizeOrderData,
+  getInitialCafeStatus,
+  syncCafeStatusToFirebaseAndStore,
+  listenToCafeStatus
 } from './services/firebase';
-import { Order, OrderStatus, Product, SupportTicket, SyncLog, ApiSyncConfig, TicketStatus, TicketPriority } from './types';
+import { Order, OrderStatus, Product, SupportTicket, SyncLog, ApiSyncConfig, TicketStatus, TicketPriority, CafeStatus } from './types';
 import { 
   INITIAL_ORDERS, 
   INITIAL_PRODUCTS, 
   INITIAL_TICKETS, 
   INITIAL_SYNC_LOGS, 
-  INITIAL_API_CONFIG 
+  INITIAL_API_CONFIG,
+  deduplicateProducts
 } from './data/mockData';
 import { playOrderNotificationChime } from './utils/audio';
 import { Header } from './components/Header';
+import { Sidebar } from './components/Sidebar';
 import { OrdersView } from './components/OrdersView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { InventoryView } from './components/InventoryView';
 import { SupportView } from './components/SupportView';
 import { ApiSyncView } from './components/ApiSyncView';
+import { CustomerDashboardView } from './components/CustomerDashboardView';
 import { OrderDetailsModal } from './components/OrderDetailsModal';
 import { CreateOrderModal } from './components/CreateOrderModal';
 import { FirebaseDiagnosticModal } from './components/FirebaseDiagnosticModal';
 import { EditProductModal } from './components/EditProductModal';
+import { CafeStatusModal } from './components/CafeStatusModal';
 import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
 
 export default function App() {
   // Navigation
-  const [activeTab, setActiveTab] = useState<'orders' | 'analytics' | 'inventory' | 'support' | 'api-sync'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'analytics' | 'inventory' | 'support' | 'api-sync' | 'customer'>('orders');
+  const [isMinimized, setIsMinimized] = useState<boolean>(true);
+  const [sidebarPosition, setSidebarPosition] = useState<'left' | 'right'>(() => {
+    return (localStorage.getItem('barozza_sidebar_position') as 'left' | 'right') || 'left';
+  });
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('barozza_sidebar_width');
+    return saved ? Number(saved) : 76;
+  });
+
+  // Cafe Status (Open vs Closed with automatic reopening and B&W UI)
+  const [cafeStatus, setCafeStatus] = useState<CafeStatus>(getInitialCafeStatus);
+  const [isCafeStatusModalOpen, setIsCafeStatusModalOpen] = useState<boolean>(false);
 
   // Core Data States - Starts empty so ONLY authentic customer dashboard parcels are received
   const [orders, setOrders] = useState<Order[]>([]);
@@ -45,27 +65,51 @@ export default function App() {
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((p: any) => ({
+          return deduplicateProducts(parsed.map((p: any) => ({
             ...p,
             syncedWithExternalStore: true,
             lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
-          }));
+          })));
         }
       }
     } catch (e) {}
-    return INITIAL_PRODUCTS.map(p => ({
+    return deduplicateProducts(INITIAL_PRODUCTS.map(p => ({
       ...p,
       syncedWithExternalStore: true,
       lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
-    }));
+    })));
   });
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [apiConfig, setApiConfig] = useState<ApiSyncConfig>(INITIAL_API_CONFIG);
 
-  // Settings & Status
+  // Settings & Status (Dark Mode Enabled by Default)
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('the_brozza_theme');
+      if (saved !== null) {
+        return saved === 'dark';
+      }
+    } catch {
+      // ignore
+    }
+    return true; // Default to dark mode
+  });
+
+  // Sync dark mode class and persist user preference
+  useEffect(() => {
+    try {
+      localStorage.setItem('the_brozza_theme', isDarkMode ? 'dark' : 'light');
+    } catch {
+      // ignore
+    }
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
   const [collectionName, setCollectionName] = useState<string>('orders');
   const [rtdbPath, setRtdbPath] = useState<string>('orders');
   const [firebaseStatus, setFirebaseStatus] = useState<FirebaseConnectionStatus>({
@@ -134,18 +178,41 @@ export default function App() {
       }
     };
 
+    // Helper to strictly identify genuine customer parcels and reject unwanted junks/dummies
+    const isAuthenticCustomerParcel = (fo: Order | null | undefined): fo is Order => {
+      if (!fo) return false;
+      const idLower = (fo.id || '').toLowerCase();
+      const orderNumLower = (fo.orderNumber || '').toLowerCase();
+      const nameLower = (fo.customer?.name || '').toLowerCase();
+      const notesLower = (fo.notes || '').toLowerCase();
+
+      if (
+        fo.id === 'ord-cod-01' || 
+        fo.id === 'ord-upi-02' || 
+        fo.orderNumber === 'ORD-9821' || 
+        fo.orderNumber === 'ORD-9822' ||
+        idLower.includes('dummy') || idLower.includes('test') ||
+        orderNumLower.includes('dummy') || orderNumLower.includes('test') ||
+        nameLower.includes('dummy') || nameLower === 'test' || nameLower === 'test customer' ||
+        notesLower.includes('diagnostic console')
+      ) {
+        return false;
+      }
+
+      // Must have at least 1 real item and a valid amount
+      if (!fo.items || fo.items.length === 0) return false;
+      if (!fo.totalAmount || fo.totalAmount <= 0) return false;
+
+      return true;
+    };
+
     try {
       // 1. Listen to Firestore - ONLY genuine customer dashboard orders
       unsubscribeFirestore = listenToFirestoreOrders(
         collectionName,
         (firebaseOrders) => {
-          // Strictly filter only real customer parcels from customer dashboard (exclude any dummy / mock test IDs)
-          const customerOrders = firebaseOrders.filter(
-            fo => fo.id !== 'ord-cod-01' && 
-                  fo.id !== 'ord-upi-02' && 
-                  fo.orderNumber !== 'ORD-9821' && 
-                  fo.orderNumber !== 'ORD-9822'
-          );
+          // Strictly filter only real customer parcels from customer dashboard (exclude any dummy / junk parcels)
+          const customerOrders = firebaseOrders.filter(isAuthenticCustomerParcel);
 
           setOrders(customerOrders);
 
@@ -192,12 +259,7 @@ export default function App() {
         unsubscribeRTDB = listenToRTDBOrders(
           rtdbPath,
           (rtdbOrders) => {
-            const customerRtdbOrders = rtdbOrders.filter(
-              ro => ro.id !== 'ord-cod-01' && 
-                    ro.id !== 'ord-upi-02' && 
-                    ro.orderNumber !== 'ORD-9821' && 
-                    ro.orderNumber !== 'ORD-9822'
-            );
+            const customerRtdbOrders = rtdbOrders.filter(isAuthenticCustomerParcel);
             if (customerRtdbOrders.length > 0) {
               setOrders(prev => {
                 let hasNewIncoming = false;
@@ -214,7 +276,7 @@ export default function App() {
                 }
 
                 const map = new Map<string, Order>();
-                prev.forEach(o => map.set(o.id, o));
+                prev.filter(isAuthenticCustomerParcel).forEach(o => map.set(o.id, o));
                 customerRtdbOrders.forEach(o => map.set(o.id, o));
                 return Array.from(map.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
               });
@@ -239,10 +301,7 @@ export default function App() {
       const unsubscribeCatalog = listenToMenuCatalog((catalogDishes) => {
         if (catalogDishes && catalogDishes.length > 0) {
           setProducts(prev => {
-            const map = new Map<string, Product>();
-            prev.forEach(p => map.set(p.sku || p.id, p));
-            catalogDishes.forEach(d => map.set(d.sku || d.id, d));
-            const merged = Array.from(map.values());
+            const merged = deduplicateProducts([...catalogDishes, ...prev]);
             try {
               localStorage.setItem("barozza_admin_products", JSON.stringify(merged));
             } catch (e) {}
@@ -300,11 +359,128 @@ export default function App() {
     }
   }, []);
 
+  // Listen to Cafe Status changes in real-time (across Firestore, BroadcastChannel, localStorage)
+  useEffect(() => {
+    const unsubscribe = listenToCafeStatus((updatedStatus) => {
+      setCafeStatus(updatedStatus);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Automatic Reopening Scheduler
+  // "the set time for opening the cafe will automatically open the cafe at typed / seted time on admin dashboard"
+  useEffect(() => {
+    const checkAutoReopen = () => {
+      if (!cafeStatus.isOpen && cafeStatus.reopenTime) {
+        const targetTimestamp = new Date(cafeStatus.reopenTime).getTime();
+        if (!isNaN(targetTimestamp) && Date.now() >= targetTimestamp) {
+          const autoReopened: CafeStatus = {
+            isOpen: true,
+            reopenTime: '',
+            formattedReopenTime: '',
+            closedBy: 'The Admin ( Rohit ) System Auto-Reopen'
+          };
+          syncCafeStatusToFirebaseAndStore(autoReopened, products);
+          setCafeStatus(autoReopened);
+          showToast(
+            "Cafe Auto-Reopened!",
+            "Scheduled opening time reached. Customer storefront is open and full color is restored.",
+            "success"
+          );
+        }
+      }
+    };
+
+    checkAutoReopen();
+    const interval = setInterval(checkAutoReopen, 3000);
+    return () => clearInterval(interval);
+  }, [cafeStatus, products]);
+
+  // Update Cafe Status from Admin Dashboard
+  const handleUpdateCafeStatus = async (newStatus: CafeStatus) => {
+    await syncCafeStatusToFirebaseAndStore(newStatus, products);
+    setCafeStatus(newStatus);
+    if (!newStatus.isOpen) {
+      showToast(
+        "Cafe Closed Successfully",
+        `Orders locked and customer storefront set to B&W. Opens at ${newStatus.formattedReopenTime}.`,
+        "info"
+      );
+    } else {
+      showToast(
+        "Cafe Reopened",
+        "Feature turned off. Customer storefront is back to full color and accepting orders.",
+        "success"
+      );
+    }
+  };
+
+  // Reopen Cafe Early (Turn Off feature as earliest as set time)
+  const handleReopenCafeEarly = async () => {
+    const earlyOpenStatus: CafeStatus = {
+      isOpen: true,
+      reopenTime: '',
+      formattedReopenTime: '',
+      closedBy: 'The Admin ( Rohit )'
+    };
+    await handleUpdateCafeStatus(earlyOpenStatus);
+  };
+
+  // Place Order from Customer Dashboard
+  const handlePlaceCustomerOrder = async (orderData: Partial<Order>) => {
+    if (!cafeStatus.isOpen) {
+      throw new Error(`currently cafe is closed. so I'm sorry boss ! . it will open at ${cafeStatus.formattedReopenTime}`);
+    }
+
+    const orderNumber = orderData.orderNumber || `ORD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const newOrder: Order = {
+      id: `ord-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      orderNumber,
+      customer: orderData.customer || {
+        name: 'Walk-in Customer',
+        phone: '+91 98765 43210',
+        address: 'Sector 14'
+      },
+      items: orderData.items || [],
+      subtotal: orderData.subtotal || 0,
+      shippingFee: orderData.shippingFee || 0,
+      tax: 0,
+      totalAmount: orderData.totalAmount || 0,
+      status: 'pending',
+      paymentStatus: orderData.paymentStatus || 'pending',
+      paymentMethod: orderData.paymentMethod || 'cash_on_delivery',
+      parcelType: orderData.parcelType || 'hot_food',
+      source: 'customer_website',
+      createdAt: new Date().toISOString(),
+      trackingNumber: `TRK-IN-${Math.floor(100000 + Math.random() * 900000)}`,
+      estimatedDeliveryMinutes: 30
+    };
+
+    // Add to known order IDs
+    knownOrderIdsRef.current.add(newOrder.id);
+
+    // Save to Firestore and local state
+    await pushOrderToFirestore(newOrder, collectionName);
+    setOrders(prev => [newOrder, ...prev]);
+
+    if (soundEnabled) {
+      playOrderNotificationChime();
+    }
+
+    showToast(
+      "Customer Parcel Received!",
+      `New Order #${orderNumber} for ₹${newOrder.totalAmount} (${newOrder.paymentMethod === 'cash_on_delivery' ? 'COD' : 'UPI'}) placed.`,
+      "success"
+    );
+  };
+
   // Order Status Update
   const handleUpdateOrderStatus = async (orderId: string, status: OrderStatus, additionalFields?: Partial<Order>) => {
+    const ids = orderId.includes(',') ? orderId.split(',').map(s => s.trim()) : [orderId];
+
     // 1. Update local state
     setOrders(prev => prev.map(o => {
-      if (o.id === orderId) {
+      if (ids.includes(o.id)) {
         return {
           ...o,
           status,
@@ -314,7 +490,7 @@ export default function App() {
       return o;
     }));
 
-    if (selectedOrder && selectedOrder.id === orderId) {
+    if (selectedOrder && ids.includes(selectedOrder.id)) {
       setSelectedOrder(prev => prev ? {
         ...prev,
         status,
@@ -322,17 +498,19 @@ export default function App() {
       } : null);
     }
 
-    // 2. Try updating in Firebase
-    try {
-      await updateFirestoreOrderStatus(orderId, status, additionalFields, collectionName);
-    } catch (err) {
-      console.warn("Firebase update status skipped or failed:", err);
-    }
+    // 2. Try updating in Firebase for all ids
+    for (const id of ids) {
+      try {
+        await updateFirestoreOrderStatus(id, status, additionalFields, collectionName);
+      } catch (err) {
+        console.warn(`Firebase update status skipped for ${id}:`, err);
+      }
 
-    try {
-      await updateRTDBOrderStatus(orderId, status, rtdbPath);
-    } catch (err) {
-      console.warn("RTDB update status skipped:", err);
+      try {
+        await updateRTDBOrderStatus(id, status, rtdbPath);
+      } catch (err) {
+        console.warn(`RTDB update status skipped for ${id}:`, err);
+      }
     }
 
     showToast("Status Updated", `Parcel order updated to "${status.replace('_', ' ')}"`, 'success');
@@ -400,6 +578,12 @@ export default function App() {
     syncDishesToFirestoreAndStore(updatedList);
 
     if (updatedProduct) {
+      setToast({
+        title: 'Quantity Updated (Live Sync)',
+        message: `${updatedProduct.name}: ${newStock} units available. Live changes synced to ${apiConfig.partnerStoreUrl}`,
+        type: 'success'
+      });
+
       if (apiConfig.autoSyncStock) {
         setSyncLogs(prev => [
           {
@@ -423,14 +607,17 @@ export default function App() {
     let updatedProducts: Product[] = [];
     if (productData.id) {
       // Edit
-      updatedProducts = products.map(p => p.id === productData.id ? { 
+      updatedProducts = products.map(p => (p.id === productData.id || (productData.dishId && p.dishId === productData.dishId) || (productData.sku && p.sku === productData.sku)) ? { 
         ...p, 
         ...productData,
         syncedWithExternalStore: true,
         lastSyncedAt: new Date().toISOString()
       } as Product : p);
       setProducts(updatedProducts);
-      showToast("Dish & Price Updated", `Catalog record "${productData.name}" (₹${Number(productData.price)}) updated and synced with customer website!`);
+      try {
+        localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+      } catch (e) {}
+      showToast("Dish Updated (Live Sync)", `"${productData.name}" (₹${Number(productData.price)}) updated and live-synced with customer website & dashboard!`);
     } else {
       // Add new dish
       const dishCount = products.filter(p => p.sku?.startsWith('BRZ-DISH')).length + 1;
@@ -452,6 +639,9 @@ export default function App() {
       };
       updatedProducts = [newProd, ...products];
       setProducts(updatedProducts);
+      try {
+        localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+      } catch (e) {}
       showToast("Dish Added to Catalog", `"${newProd.name}" (₹${newProd.price}) added and pushed to customer website!`);
     }
 
@@ -468,6 +658,53 @@ export default function App() {
         statusCode: 200,
         details: `Synced dish [${productData.name}] (₹${productData.price}) with ${apiConfig.partnerStoreUrl} and Firestore`,
         payload: { name: productData.name, price: productData.price, category: productData.category, syncedWithCustomerSite: true }
+      },
+      ...prev
+    ]);
+  };
+
+  // Quick dish rename from inventory table (Live instant sync)
+  const handleQuickRename = async (productId: string, newName: string) => {
+    if (!newName || !newName.trim()) return;
+    const trimmed = newName.trim();
+    let renamedProduct: Product | undefined;
+
+    const updatedProducts = products.map(p => {
+      if (p.id === productId || p.dishId === productId || p.sku === productId) {
+        renamedProduct = {
+          ...p,
+          name: trimmed,
+          syncedWithExternalStore: true,
+          lastSyncedAt: new Date().toISOString()
+        };
+        return renamedProduct;
+      }
+      return p;
+    });
+
+    setProducts(updatedProducts);
+    try {
+      localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+    } catch (e) {}
+
+    await syncDishesToFirestoreAndStore(updatedProducts);
+
+    showToast(
+      "Dish Renamed (Live Sync)",
+      `Dish renamed to "${trimmed}" — Live changes synced to brozza.vercel.app & customer dashboard!`,
+      'success'
+    );
+
+    setSyncLogs(prev => [
+      {
+        id: `log_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        type: 'stock.push',
+        source: 'Live Customer Storefront Sync',
+        status: 'success',
+        statusCode: 200,
+        details: `Renamed dish to "${trimmed}" — Synced live to ${apiConfig.partnerStoreUrl}`,
+        payload: { productId, name: trimmed, liveSync: true }
       },
       ...prev
     ]);
@@ -688,37 +925,120 @@ export default function App() {
     showToast("Synced with Firebase", "Live customer order stream verified with brozza-1f6be", 'info');
   };
 
+  // Permanently purge any unwanted dummy/junk parcels from dashboard and Firebase
+  const handlePurgeDummyOrders = useCallback(async () => {
+    const junkOrders = orders.filter(ord => {
+      const idLower = (ord.id || '').toLowerCase();
+      const orderNumLower = (ord.orderNumber || '').toLowerCase();
+      const nameLower = (ord.customer?.name || '').toLowerCase();
+      const notesLower = (ord.notes || '').toLowerCase();
+      return (
+        ord.id === 'ord-cod-01' || 
+        ord.id === 'ord-upi-02' || 
+        ord.orderNumber === 'ORD-9821' || 
+        ord.orderNumber === 'ORD-9822' ||
+        idLower.includes('dummy') || idLower.includes('test') ||
+        orderNumLower.includes('dummy') || orderNumLower.includes('test') ||
+        nameLower.includes('dummy') || nameLower === 'test' || nameLower === 'test customer' ||
+        notesLower.includes('diagnostic console') ||
+        !ord.items || ord.items.length === 0 ||
+        !ord.totalAmount || ord.totalAmount <= 0
+      );
+    });
+
+    for (const junk of junkOrders) {
+      deleteOrderDocument(junk.id, 'orders', 'orders').catch(() => {});
+    }
+
+    setOrders(prev => prev.filter(ord => {
+      const idLower = (ord.id || '').toLowerCase();
+      const orderNumLower = (ord.orderNumber || '').toLowerCase();
+      const nameLower = (ord.customer?.name || '').toLowerCase();
+      const notesLower = (ord.notes || '').toLowerCase();
+      return !(
+        ord.id === 'ord-cod-01' || 
+        ord.id === 'ord-upi-02' || 
+        ord.orderNumber === 'ORD-9821' || 
+        ord.orderNumber === 'ORD-9822' ||
+        idLower.includes('dummy') || idLower.includes('test') ||
+        orderNumLower.includes('dummy') || orderNumLower.includes('test') ||
+        nameLower.includes('dummy') || nameLower === 'test' || nameLower === 'test customer' ||
+        notesLower.includes('diagnostic console') ||
+        !ord.items || ord.items.length === 0 ||
+        !ord.totalAmount || ord.totalAmount <= 0
+      );
+    }));
+
+    showToast("Unwanted Junks Removed", "All dummy parcels and unwanted test entries have been cleaned.", "success");
+  }, [orders, showToast]);
+
   const openTicketsCount = tickets.filter(t => t.status === 'open' || t.status === 'in_progress').length;
   const lowStockCount = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold).length;
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-white text-slate-900'} flex flex-col font-sans selection:bg-indigo-500 selection:text-white`}>
-      {/* Global Header */}
-      <Header
+    <div className={`min-h-screen ${isDarkMode ? 'bg-[#0a0f1d] text-slate-100' : 'bg-white text-slate-900'} flex font-sans selection:bg-indigo-500 selection:text-white`}>
+      {/* Minimized / Adjustable Vertical Sidebar (dockable Left or Right, manually resizable by admin) */}
+      <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        ordersCount={orders.length}
-        openTicketsCount={openTicketsCount}
-        lowStockCount={lowStockCount}
-        firebaseStatus={firebaseStatus}
-        soundEnabled={soundEnabled}
-        setSoundEnabled={setSoundEnabled}
+        isMinimized={isMinimized}
+        setIsMinimized={setIsMinimized}
         isDarkMode={isDarkMode}
-        setIsDarkMode={setIsDarkMode}
-        onOpenFirebaseModal={() => setIsFirebaseModalOpen(true)}
-        onOpenNewOrderModal={() => setIsNewOrderModalOpen(true)}
+        sidebarPosition={sidebarPosition}
+        setSidebarPosition={setSidebarPosition}
+        customWidth={sidebarWidth}
+        setCustomWidth={setSidebarWidth}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'orders' && (
-          <OrdersView
-            orders={orders}
+      {/* Main Content Area on the right (~90% width) */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        {/* Global Header */}
+        <Header
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          ordersCount={orders.length}
+          openTicketsCount={openTicketsCount}
+          lowStockCount={lowStockCount}
+          firebaseStatus={firebaseStatus}
+          soundEnabled={soundEnabled}
+          setSoundEnabled={setSoundEnabled}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
+          onOpenFirebaseModal={() => setIsFirebaseModalOpen(true)}
+          onOpenNewOrderModal={() => setIsNewOrderModalOpen(true)}
+          cafeStatus={cafeStatus}
+          onOpenCafeStatusModal={() => setIsCafeStatusModalOpen(true)}
+          onReopenCafeEarly={handleReopenCafeEarly}
+        />
+
+        {/* Main Content Area */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {activeTab === 'orders' && (
+            <OrdersView
+              orders={orders}
+              isDarkMode={isDarkMode}
+              onSelectOrder={(ord) => setSelectedOrder(ord)}
+              onUpdateStatus={handleUpdateOrderStatus}
+              onCreateSupportTicket={handleCreateTicketFromOrder}
+              onOpenCreateOrder={() => setIsNewOrderModalOpen(true)}
+              cafeStatus={cafeStatus}
+              onOpenCafeStatusModal={() => setIsCafeStatusModalOpen(true)}
+              onReopenCafeEarly={handleReopenCafeEarly}
+              onSwitchToCustomerView={() => setActiveTab('customer')}
+              onPurgeDummyOrders={handlePurgeDummyOrders}
+              onSwitchToAnalytics={() => setActiveTab('analytics')}
+            />
+          )}
+
+        {activeTab === 'customer' && (
+          <CustomerDashboardView
+            products={products}
+            cafeStatus={cafeStatus}
             isDarkMode={isDarkMode}
-            onSelectOrder={(ord) => setSelectedOrder(ord)}
-            onUpdateStatus={handleUpdateOrderStatus}
-            onCreateSupportTicket={handleCreateTicketFromOrder}
-            onOpenCreateOrder={() => setIsNewOrderModalOpen(true)}
+            onPlaceOrder={handlePlaceCustomerOrder}
+            onOpenAdminCafeModal={() => setIsCafeStatusModalOpen(true)}
+            onReopenCafeEarly={handleReopenCafeEarly}
+            onUpdateCafeStatus={handleUpdateCafeStatus}
           />
         )}
 
@@ -733,6 +1053,7 @@ export default function App() {
         {activeTab === 'inventory' && (
           <InventoryView
             products={products}
+            orders={orders}
             onUpdateStock={handleUpdateStock}
             onOpenEditModal={(prod) => {
               setEditingProduct(prod);
@@ -742,6 +1063,11 @@ export default function App() {
             isSyncingStock={isSyncingStock}
             partnerStoreUrl={apiConfig.partnerStoreUrl}
             onQuickUpdatePrice={handleQuickUpdatePrice}
+            onQuickRename={handleQuickRename}
+            cafeStatus={cafeStatus}
+            onOpenCafeStatusModal={() => setIsCafeStatusModalOpen(true)}
+            onReopenCafeEarly={handleReopenCafeEarly}
+            onSwitchToCustomerTab={() => setActiveTab('customer')}
           />
         )}
 
@@ -768,63 +1094,69 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-800 bg-slate-950 py-4 px-4 sm:px-6 lg:px-8 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-400">OmniStore Commerce Cloud</span>
-            <span>•</span>
-            <span className="font-mono text-emerald-400">Firebase: brozza-1f6be (Firestore Active)</span>
-          </div>
-          <div>
-            REST API v1 Secured • Multi-Channel Logistics Engine
-          </div>
-        </div>
-      </footer>
-
       {/* Modals */}
       {/* 1. Order Details Modal */}
-      <OrderDetailsModal
-        order={selectedOrder}
-        isOpen={!!selectedOrder}
-        onClose={() => setSelectedOrder(null)}
-        onUpdateStatus={handleUpdateOrderStatus}
-        onCreateSupportTicket={handleCreateTicketFromOrder}
-      />
+      {selectedOrder && (
+        <OrderDetailsModal
+          order={selectedOrder}
+          isOpen={!!selectedOrder}
+          onClose={() => setSelectedOrder(null)}
+          onUpdateStatus={handleUpdateOrderStatus}
+          onCreateSupportTicket={handleCreateTicketFromOrder}
+        />
+      )}
 
       {/* 2. Dispatch / Create Order Modal */}
-      <CreateOrderModal
-        isOpen={isNewOrderModalOpen}
-        onClose={() => setIsNewOrderModalOpen(false)}
-        products={products}
-        collectionName={collectionName}
-        rtdbPath={rtdbPath}
-        onOrderCreated={handleOrderCreated}
-      />
+      {isNewOrderModalOpen && (
+        <CreateOrderModal
+          isOpen={isNewOrderModalOpen}
+          onClose={() => setIsNewOrderModalOpen(false)}
+          products={products}
+          collectionName={collectionName}
+          rtdbPath={rtdbPath}
+          onOrderCreated={handleOrderCreated}
+        />
+      )}
 
       {/* 3. Firebase Diagnostic Modal */}
-      <FirebaseDiagnosticModal
-        isOpen={isFirebaseModalOpen}
-        onClose={() => setIsFirebaseModalOpen(false)}
-        status={firebaseStatus}
-        collectionName={collectionName}
-        setCollectionName={setCollectionName}
-        rtdbPath={rtdbPath}
-        setRtdbPath={setRtdbPath}
-        activeOrders={orders}
-        onOrderAdded={handleOrderCreated}
-      />
+      {isFirebaseModalOpen && (
+        <FirebaseDiagnosticModal
+          isOpen={isFirebaseModalOpen}
+          onClose={() => setIsFirebaseModalOpen(false)}
+          status={firebaseStatus}
+          collectionName={collectionName}
+          setCollectionName={setCollectionName}
+          rtdbPath={rtdbPath}
+          setRtdbPath={setRtdbPath}
+          activeOrders={orders}
+          onOrderAdded={handleOrderCreated}
+        />
+      )}
 
       {/* 4. Edit / Add Product Modal */}
-      <EditProductModal
-        product={editingProduct}
-        isOpen={isEditProductModalOpen}
-        onClose={() => {
-          setIsEditProductModalOpen(false);
-          setEditingProduct(null);
-        }}
-        onSave={handleSaveProduct}
-      />
+      {isEditProductModalOpen && (
+        <EditProductModal
+          product={editingProduct}
+          isOpen={isEditProductModalOpen}
+          availableCategories={Array.from(new Set(products.map(p => p.category)))}
+          onClose={() => {
+            setIsEditProductModalOpen(false);
+            setEditingProduct(null);
+          }}
+          onSave={handleSaveProduct}
+        />
+      )}
+
+      {/* 5. Cafe Status / Ordering Controls Modal */}
+      {isCafeStatusModalOpen && (
+        <CafeStatusModal
+          isOpen={isCafeStatusModalOpen}
+          onClose={() => setIsCafeStatusModalOpen(false)}
+          cafeStatus={cafeStatus}
+          onUpdateCafeStatus={handleUpdateCafeStatus}
+          isDarkMode={isDarkMode}
+        />
+      )}
 
       {/* Toast Notification Banner */}
       {toast && (
@@ -848,6 +1180,7 @@ export default function App() {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

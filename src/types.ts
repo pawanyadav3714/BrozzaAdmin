@@ -48,6 +48,10 @@ export interface Order {
   parcelReceivedAt?: string;
   deliveredAt?: string;
   cashCollected?: boolean;
+  isMultipleOrders?: boolean;
+  mergedOrderCount?: number;
+  mergedOrderNumbers?: string[];
+  mergedOrderIds?: string[];
 }
 
 export interface Product {
@@ -117,3 +121,13 @@ export interface ApiSyncConfig {
   firestoreDatabaseId: string;
   projectId: string;
 }
+
+export interface CafeStatus {
+  isOpen: boolean;
+  closedAt?: string;
+  reopenTime: string; // ISO string
+  formattedReopenTime: string; // e.g., "Sep 21, 2026, 06:30 PM"
+  closedBy?: string;
+  closureReason?: string;
+}
+

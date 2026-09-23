@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { X, Package, Save, Check, UploadCloud, Trash2, Globe, CheckCircle2 } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { X, Package, Save, Check, UploadCloud, Trash2, Globe, CheckCircle2, ChevronDown } from 'lucide-react';
 import { Product } from '../types';
 
 interface EditProductModalProps {
@@ -7,20 +7,28 @@ interface EditProductModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (productData: Partial<Product>) => void;
+  availableCategories?: string[];
 }
 
 export const EditProductModal: React.FC<EditProductModalProps> = ({
   product,
   isOpen,
   onClose,
-  onSave
+  onSave,
+  availableCategories = []
 }) => {
   const isEditing = !!product;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const baseCategories = useMemo(() => ['Starters', 'Chinese', 'Italian', 'Rolls', 'Beverages', 'Specials', 'Snacks'], []);
+  const categoryOptions = useMemo(() => {
+    return Array.from(new Set([...baseCategories, ...availableCategories, ...(product?.category ? [product.category] : [])])).filter(Boolean);
+  }, [baseCategories, availableCategories, product]);
+
   const [name, setName] = useState(product?.name || '');
   const [sku, setSku] = useState(product?.sku || '');
   const [category, setCategory] = useState(product?.category || 'Starters');
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [description, setDescription] = useState(product?.description || '');
   const [price, setPrice] = useState(product?.price || 40.00);
   const [costPrice, setCostPrice] = useState(product?.costPrice || 20.00);
@@ -33,9 +41,11 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   // Sync form inputs whenever modal opens or edited product changes
   useEffect(() => {
     if (isOpen) {
+      const initialCat = product?.category || categoryOptions[0] || 'Starters';
       setName(product?.name || '');
       setSku(product?.sku || '');
-      setCategory(product?.category || 'Starters');
+      setCategory(initialCat);
+      setIsCustomCategory(!categoryOptions.includes(initialCat));
       setDescription(product?.description || '');
       setPrice(product?.price || 40.00);
       setCostPrice(product?.costPrice || 20.00);
@@ -44,7 +54,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setImageUrl(product?.imageUrl || '');
       setSyncedWithExternalStore(true);
     }
-  }, [isOpen, product]);
+  }, [isOpen, product, categoryOptions]);
 
   if (!isOpen) return null;
 
@@ -148,28 +158,77 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
             <div>
               <label className="text-slate-400 block mb-1">Category</label>
-              <input
-                type="text"
-                required
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-                placeholder="Audio & Tech"
-              />
+              <div className="relative">
+                <select
+                  value={isCustomCategory ? '__custom__' : category}
+                  onChange={(e) => {
+                    if (e.target.value === '__custom__') {
+                      setIsCustomCategory(true);
+                      setCategory('');
+                    } else {
+                      setIsCustomCategory(false);
+                      setCategory(e.target.value);
+                    }
+                  }}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer appearance-none pr-8 text-xs"
+                >
+                  {categoryOptions.map((cat) => (
+                    <option key={cat} value={cat} className="bg-slate-900 text-slate-200">
+                      {cat}
+                    </option>
+                  ))}
+                  <option value="__custom__" className="bg-slate-900 text-indigo-400 font-semibold">
+                    + Add New Category...
+                  </option>
+                </select>
+                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </div>
+              </div>
+
+              {isCustomCategory && (
+                <div className="mt-1.5">
+                  <input
+                    type="text"
+                    required
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full bg-slate-950 border border-indigo-500/80 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none placeholder-slate-500 text-xs"
+                    placeholder="Type new category..."
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
           </div>
 
-          <div>
-            <label className="text-slate-400 block mb-1">Menu Price (₹ INR)</label>
-            <div className="relative flex items-center">
-              <span className="absolute left-3 text-emerald-400 font-bold font-mono">₹</span>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-slate-400 block mb-1">Menu Price (₹ INR)</label>
+              <div className="relative flex items-center">
+                <span className="absolute left-3 text-emerald-400 font-bold font-mono">₹</span>
+                <input
+                  type="number"
+                  step="1"
+                  required
+                  value={price}
+                  onChange={(e) => setPrice(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-3 py-1.5 text-slate-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 block mb-1">Available Quantity (Units)</label>
               <input
                 type="number"
+                min="0"
                 step="1"
                 required
-                value={price}
-                onChange={(e) => setPrice(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-3 py-1.5 text-slate-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                value={stock}
+                onChange={(e) => setStock(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono font-bold focus:outline-none focus:border-indigo-500"
+                placeholder="25"
               />
             </div>
           </div>

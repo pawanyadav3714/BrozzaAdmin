@@ -117,6 +117,103 @@ export const ApiSyncView: React.FC<ApiSyncViewProps> = ({
     }
   };
 
+  const handleSimulateMultipleOrdersInbound = async () => {
+    setIsSimulatingInbound(true);
+    const sharedPhone = inboundOrderPhone || '+91 98450 11223';
+    const sharedName = inboundOrderCustName || 'Pooja Nair';
+    const sharedAddress = inboundAddress || 'Flat 402, Lotus Orchid, Indiranagar, 100ft Road';
+
+    try {
+      // Order 1: Farmhouse Pizza & Choco Lava Cake
+      await onSimulateInboundOrder({
+        orderNumber: `ORD-${Math.floor(10000 + Math.random() * 90000)}`,
+        customer: {
+          name: sharedName,
+          phone: sharedPhone,
+          email: 'pooja.nair@customer.com',
+          address: sharedAddress,
+          landmark: 'Opposite Metro Station Pillar 42',
+          city: 'Bangalore',
+          pincode: '560038'
+        },
+        items: [
+          {
+            id: 'item_pizza_fh',
+            name: 'Domino’s Farmhouse Cheese Burst Pizza',
+            sku: 'DOM-PIZZA-CH',
+            price: 459.00,
+            quantity: 1,
+            image: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=250&q=80'
+          },
+          {
+            id: 'item_choco_lava',
+            name: 'Choco Lava Cake',
+            sku: 'DOM-DESS-CL',
+            price: 90.00,
+            quantity: 2,
+            image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=250&q=80'
+          }
+        ],
+        subtotal: 639.00,
+        shippingFee: 0.00,
+        tax: 31.95,
+        totalAmount: 670.95,
+        status: 'pending',
+        paymentMethod: inboundPayMethod,
+        paymentStatus: inboundPayMethod === 'cash_on_delivery' ? 'pending' : 'clear',
+        parcelType: 'hot_food',
+        source: 'customer_website',
+        notes: 'Order #1 placed from Customer Storefront'
+      });
+
+      // Brief gap then Order 2 from the same customer (e.g. Garlic Bread & Pepsi)
+      await new Promise(r => setTimeout(r, 120));
+
+      await onSimulateInboundOrder({
+        orderNumber: `ORD-${Math.floor(10000 + Math.random() * 90000)}`,
+        customer: {
+          name: sharedName,
+          phone: sharedPhone,
+          email: 'pooja.nair@customer.com',
+          address: sharedAddress,
+          landmark: 'Opposite Metro Station Pillar 42',
+          city: 'Bangalore',
+          pincode: '560038'
+        },
+        items: [
+          {
+            id: 'item_garlic_bread',
+            name: 'Stuffed Garlic Breadsticks',
+            sku: 'DOM-SIDE-GB',
+            price: 159.00,
+            quantity: 1,
+            image: 'https://images.unsplash.com/photo-1573140247632-f8fd74997d5c?w=250&q=80'
+          },
+          {
+            id: 'item_beverage_pepsi',
+            name: 'Cold Pepsi Black (500ml)',
+            sku: 'DOM-BEV-PB',
+            price: 60.00,
+            quantity: 2,
+            image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=250&q=80'
+          }
+        ],
+        subtotal: 279.00,
+        shippingFee: 0.00,
+        tax: 13.95,
+        totalAmount: 292.95,
+        status: 'pending',
+        paymentMethod: inboundPayMethod,
+        paymentStatus: inboundPayMethod === 'cash_on_delivery' ? 'pending' : 'clear',
+        parcelType: 'hot_food',
+        source: 'customer_website',
+        notes: 'Order #2 placed from Customer Storefront'
+      });
+    } finally {
+      setIsSimulatingInbound(false);
+    }
+  };
+
   // Code snippets for Customer Website Integration
   const customerFirebaseCode = `// -------------------------------------------------------------
 // CUSTOMER WEBSITE INTEGRATION SCRIPT
@@ -317,7 +414,7 @@ app.post('/api/v1/orders', async (req, res) => {
             </select>
           </div>
 
-          <div className="flex items-end">
+          <div className="flex flex-col sm:flex-row items-end gap-2">
             <button
               onClick={handleRunInboundSimulation}
               disabled={isSimulatingInbound}
@@ -325,6 +422,15 @@ app.post('/api/v1/orders', async (req, res) => {
             >
               <Send className="w-3.5 h-3.5" />
               <span>{isSimulatingInbound ? 'Dispatching...' : 'Dispatch Live Order'}</span>
+            </button>
+            <button
+              onClick={handleSimulateMultipleOrdersInbound}
+              disabled={isSimulatingInbound}
+              className="w-full py-2 px-3 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-black font-extrabold text-xs shadow transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Dispatches 2 orders simultaneously for the same customer to demonstrate the single yellow border parcel div"
+            >
+              <Zap className="w-3.5 h-3.5 text-black" />
+              <span>{isSimulatingInbound ? 'Dispatching...' : 'Test Multi-Orders (Yellow Border)'}</span>
             </button>
           </div>
         </div>

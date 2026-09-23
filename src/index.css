@@ -67,3 +67,26 @@
   border-color: #34d399 !important;
   box-shadow: 0 0 22px 0px rgba(16, 185, 129, 0.45), 0 6px 14px -2px rgba(0, 0, 0, 0.5) !important;
 }
+
+/* MULTIPLE ORDERS RECEIVED AT A TIME - CONSOLIDATED PARCEL YELLOW BORDER */
+@keyframes yellowPulseAura {
+  0%, 100% {
+    box-shadow: 0 0 16px -1px rgba(250, 204, 21, 0.45), 0 4px 10px -2px rgba(0, 0, 0, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 32px 5px rgba(250, 204, 21, 0.75), 0 6px 20px -1px rgba(250, 204, 21, 0.4);
+  }
+}
+
+.card-yellow-multi-parcel-border {
+  border: 4px solid #facc15 !important; /* Pure Tailwind yellow-400 */
+  box-shadow: 0 0 24px 2px rgba(250, 204, 21, 0.45), 0 4px 14px -1px rgba(0, 0, 0, 0.5) !important;
+  animation: yellowPulseAura 3s ease-in-out infinite !important;
+  transition: all 0.25s ease-in-out;
+}
+
+.card-yellow-multi-parcel-border:hover {
+  border-color: #fde047 !important;
+  box-shadow: 0 0 36px 6px rgba(250, 204, 21, 0.7), 0 8px 24px -2px rgba(0, 0, 0, 0.6) !important;
+}
+

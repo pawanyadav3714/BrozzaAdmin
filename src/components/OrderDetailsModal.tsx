@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Package, 
@@ -42,14 +42,23 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   onUpdateStatus,
   onCreateSupportTicket
 }) => {
-  if (!isOpen || !order) return null;
-
-  const [currentStatus, setCurrentStatus] = useState<OrderStatus>(order.status);
-  const [currentPaymentStatus, setCurrentPaymentStatus] = useState(order.paymentStatus);
-  const [trackingNumber, setTrackingNumber] = useState(order.trackingNumber || '');
-  const [assignedWorker, setAssignedWorker] = useState(order.assignedWorker || 'Warehouse Worker');
+  const [currentStatus, setCurrentStatus] = useState<OrderStatus>(order?.status || 'pending');
+  const [currentPaymentStatus, setCurrentPaymentStatus] = useState(order?.paymentStatus || 'pending');
+  const [trackingNumber, setTrackingNumber] = useState(order?.trackingNumber || '');
+  const [assignedWorker, setAssignedWorker] = useState(order?.assignedWorker || 'Warehouse Worker');
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  useEffect(() => {
+    if (order) {
+      setCurrentStatus(order.status);
+      setCurrentPaymentStatus(order.paymentStatus);
+      setTrackingNumber(order.trackingNumber || '');
+      setAssignedWorker(order.assignedWorker || 'Warehouse Worker');
+    }
+  }, [order]);
+
+  if (!isOpen || !order) return null;
 
   const isCOD = order.paymentMethod === 'cash_on_delivery' || order.paymentMethod.toLowerCase().includes('cash');
   const isUPI = order.paymentMethod === 'upi' || order.paymentMethod.toLowerCase().includes('upi');
@@ -80,7 +89,8 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onUpdateStatus(order.id, currentStatus, {
+      const targetId = order.mergedOrderIds && order.mergedOrderIds.length > 0 ? order.mergedOrderIds.join(',') : order.id;
+      await onUpdateStatus(targetId, currentStatus, {
         paymentStatus: currentPaymentStatus,
         trackingNumber: trackingNumber.trim() || undefined,
         assignedWorker: assignedWorker.trim() || undefined,
@@ -95,25 +105,48 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
     }
   };
 
+  const isMultiple = Boolean(order.isMultipleOrders && (order.mergedOrderCount || 0) > 1);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-      <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col shadow-2xl text-slate-900 animate-in fade-in zoom-in-95 duration-200">
+      <div className={`bg-white rounded-3xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col shadow-2xl text-slate-900 animate-in fade-in zoom-in-95 duration-200 ${
+        isMultiple ? 'border-4 border-yellow-400 shadow-[0_0_35px_rgba(250,204,21,0.4)]' : 'border border-slate-200'
+      }`}>
         {/* Top Header Banner matching reference design */}
-        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white">
+        <div className={`px-6 py-5 border-b border-slate-100 flex items-center justify-between ${
+          isMultiple ? 'bg-yellow-50/50' : 'bg-white'
+        }`}>
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shrink-0 shadow-xs">
-              <CheckCircle2 className="w-6 h-6" />
+            <div className={`w-12 h-12 rounded-2xl ${
+              isMultiple ? 'bg-yellow-100 border-2 border-yellow-400 text-yellow-700' : 'bg-emerald-50 border border-emerald-100 text-emerald-600'
+            } flex items-center justify-center shrink-0 shadow-xs`}>
+              {isMultiple ? <Package className="w-6 h-6 text-yellow-600" /> : <CheckCircle2 className="w-6 h-6" />}
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Parcel Received</h2>
-              <p className="text-xs text-slate-500 mt-0.5">The order has been successfully received.</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-900">
+                  {isMultiple ? `Consolidated Parcel (${order.mergedOrderCount} Orders Combined)` : 'Parcel Received'}
+                </h2>
+                {isMultiple && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-yellow-400 text-black font-mono uppercase tracking-wider">
+                    Yellow Border Active
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isMultiple 
+                  ? `Showing 1 single parcel showing all products ordered by ${order.customer.name} across ${order.mergedOrderCount} orders.`
+                  : 'The order has been successfully received.'}
+              </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Parcel Received</span>
+            <span className={`hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold ${
+              isMultiple ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-400' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isMultiple ? 'bg-yellow-500 animate-ping' : 'bg-emerald-500 animate-pulse'}`}></span>
+              <span>{isMultiple ? 'Consolidated Parcel' : 'Parcel Received'}</span>
             </span>
 
             <button
@@ -127,6 +160,33 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
 
         {/* Scrollable Content */}
         <div className="p-6 overflow-y-auto space-y-4 text-xs bg-slate-50/50">
+          {/* Yellow Multi-Order Banner */}
+          {isMultiple && (
+            <div className="p-4 rounded-2xl bg-yellow-400/15 border-2 border-yellow-400 text-yellow-900 shadow-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 animate-ping" />
+                  <span className="font-extrabold uppercase tracking-wider text-xs text-yellow-900">
+                    Multiple Orders Received at a Time • Single Consolidated Parcel
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded bg-yellow-400 text-black font-mono font-bold text-[11px]">
+                  {order.mergedOrderCount} Orders Combined
+                </span>
+              </div>
+              <p className="text-xs text-yellow-800 leading-relaxed font-medium">
+                This customer placed multiple orders at a time. The system displays <strong>only 1 single parcel in yellow border</strong> and presents <strong>all the products ordered by {order.customer.name}</strong> together.
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] font-mono text-yellow-950 font-bold">
+                <span className="text-yellow-800 font-sans font-semibold">Combined Order IDs:</span>
+                {order.mergedOrderNumbers?.map((num, i) => (
+                  <span key={`${num}-${i}`} className="px-2 py-0.5 rounded bg-yellow-200/90 border border-yellow-300">
+                    #{num}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Customer & Address Card with Quick Action Links */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Customer Details */}
@@ -229,7 +289,7 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               {order.items.map((item, idx) => {
                 const itemImg = item.image || (item as any).imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150&q=80';
                 return (
-                  <div key={idx} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3 rounded-2xl bg-slate-50/80 border border-slate-100">
+                  <div key={item.id ? `${item.id}-${idx}` : `item-${idx}`} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3 rounded-2xl bg-slate-50/80 border border-slate-100">
                     <div className="flex items-center gap-3">
                       <img
                         src={itemImg}
@@ -263,8 +323,8 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
             </div>
           </div>
 
-          {/* Bottom 3 Cards Row: Order Time, Payment Method, Payment Status */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Bottom Cards Row: Order Time, Payment Method */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Order Time Card */}
             <div className="p-4 rounded-2xl bg-white border border-slate-100 shadow-xs space-y-2">
               <div className="flex items-center gap-2">
@@ -295,26 +355,6 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
                 </span>
                 <span className="text-xs text-slate-500">
                   {isCOD ? '(Cash on Delivery)' : '(Google Pay)'}
-                </span>
-              </div>
-            </div>
-
-            {/* Payment Status Card */}
-            <div className="p-4 rounded-2xl bg-white border border-slate-100 shadow-xs space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <CheckCircle2 className="w-4 h-4" />
-                </div>
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Payment Status</span>
-              </div>
-              <div className="pt-1">
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                  currentPaymentStatus === 'clear' 
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                    : 'bg-amber-50 text-amber-700 border border-amber-200'
-                }`}>
-                  <span className={`w-2 h-2 rounded-full ${currentPaymentStatus === 'clear' ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
-                  <span>{currentPaymentStatus === 'clear' ? 'Payment Successful' : 'Payment Pending'}</span>
                 </span>
               </div>
             </div>

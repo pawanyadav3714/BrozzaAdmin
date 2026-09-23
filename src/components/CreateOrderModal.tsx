@@ -41,8 +41,6 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
   rtdbPath,
   onOrderCreated
 }) => {
-  if (!isOpen) return null;
-
   // Parcel & Store type
   const [parcelType, setParcelType] = useState<ParcelType>('quick_grocery');
   
@@ -65,23 +63,10 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
   const [destination, setDestination] = useState<'both' | 'firestore' | 'rtdb'>('firestore');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Selected line items
-  const [selectedItems, setSelectedItems] = useState<OrderItem[]>([
-    {
-      id: 'item-1',
-      name: 'Farm Fresh Organic Milk (1L)',
-      sku: 'BLK-MILK-01',
-      price: 68.00,
-      quantity: 2
-    },
-    {
-      id: 'item-2',
-      name: 'Artisan Multigrain Sourdough Bread',
-      sku: 'BLK-BREAD-02',
-      price: 85.00,
-      quantity: 1
-    }
-  ]);
+  // Selected line items (starts strictly empty - only user-selected items are added)
+  const [selectedItems, setSelectedItems] = useState<OrderItem[]>([]);
+
+  if (!isOpen) return null;
 
   // Quick Preset Helper
   const loadPreset = (preset: 'blinkit' | 'dominos') => {
@@ -561,7 +546,7 @@ export const CreateOrderModal: React.FC<CreateOrderModalProps> = ({
 
             <div className="space-y-2 max-h-[160px] overflow-y-auto">
               {selectedItems.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                <div key={item.id ? `${item.id}-${idx}` : `item-${idx}`} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800">
                   <div className="flex-1">
                     <p className="font-semibold text-slate-200">{item.name}</p>
                     <p className="text-[10px] text-slate-400 font-mono">₹{item.price.toFixed(2)} each</p>

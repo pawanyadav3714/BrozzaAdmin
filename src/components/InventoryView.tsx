@@ -2,7 +2,6 @@ import React, { useState, useMemo } from 'react';
 import { 
   Boxes, 
   Search, 
-  Filter, 
   Plus, 
   Edit, 
   AlertTriangle, 
@@ -14,39 +13,92 @@ import {
   ArrowUpDown,
   ExternalLink,
   Globe,
-  Store,
   Check,
   Eye,
   X,
-  Sparkles
+  Sparkles,
+  Lock,
+  Clock,
+  Timer
 } from 'lucide-react';
-import { Product } from '../types';
+import { Product, CafeStatus, Order } from '../types';
 
 interface InventoryViewProps {
   products: Product[];
+  orders?: Order[];
   onUpdateStock: (productId: string, newStock: number) => void;
   onOpenEditModal: (product: Product | null) => void;
   onSyncAllStock: () => Promise<void>;
   isSyncingStock: boolean;
   partnerStoreUrl?: string;
   onQuickUpdatePrice?: (productId: string, newPrice: number) => void;
+  onQuickRename?: (productId: string, newName: string) => void;
+  cafeStatus?: CafeStatus;
+  onOpenCafeStatusModal?: () => void;
+  onSwitchToCustomerTab?: () => void;
+  onReopenCafeEarly?: () => Promise<void>;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
   products,
+  orders = [],
   onUpdateStock,
   onOpenEditModal,
   onSyncAllStock,
   isSyncingStock,
   partnerStoreUrl = 'https://brozza.vercel.app',
-  onQuickUpdatePrice
+  onQuickUpdatePrice,
+  onQuickRename,
+  cafeStatus,
+  onOpenCafeStatusModal,
+  onSwitchToCustomerTab,
+  onReopenCafeEarly
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [tempPrice, setTempPrice] = useState<string>('');
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [tempName, setTempName] = useState<string>('');
+  const [stockInputMap, setStockInputMap] = useState<Record<string, string>>({});
   const [showStorePreview, setShowStorePreview] = useState(false);
+  const [showClosedNoticeModal, setShowClosedNoticeModal] = useState(false);
+
+  const getDisplayStock = (prod: Product) => {
+    if (stockInputMap[prod.id] !== undefined) {
+      return stockInputMap[prod.id];
+    }
+    return prod.stock.toString();
+  };
+
+  const handleStockChange = (productId: string, val: string) => {
+    setStockInputMap(prev => ({ ...prev, [productId]: val }));
+  };
+
+  const handleStockCommit = (productId: string) => {
+    const raw = stockInputMap[productId];
+    if (raw === undefined) return;
+    const num = parseInt(raw, 10);
+    if (!isNaN(num) && num >= 0) {
+      onUpdateStock(productId, num);
+    }
+    setStockInputMap(prev => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
+  };
+
+  const handleStepStock = (productId: string, currentStock: number, delta: number) => {
+    const newStock = Math.max(0, currentStock + delta);
+    onUpdateStock(productId, newStock);
+    setStockInputMap(prev => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
+  };
 
   // Categories list
   const categories = useMemo(() => {
@@ -66,8 +118,6 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     });
   }, [products, searchTerm, categoryFilter, statusFilter]);
 
-  const totalStockUnits = products.reduce((sum, p) => sum + p.stock, 0);
-  const totalCatalogValue = products.reduce((sum, p) => sum + (p.stock * p.price), 0);
   const lowStockItems = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold);
   const outOfStockItems = products.filter(p => p.stock === 0 || p.status === 'out_of_stock');
 
@@ -86,95 +136,53 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setEditingPriceId(null);
   };
 
+  const handleSaveQuickName = (productId: string) => {
+    if (tempName.trim()) {
+      if (onQuickRename) {
+        onQuickRename(productId, tempName.trim());
+      }
+    }
+    setEditingNameId(null);
+  };
+
   return (
     <div className="space-y-6">
-      {/* Live Customer Storefront Sync Banner */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950/70 via-slate-900 to-purple-950/70 border border-indigo-500/30 flex flex-wrap items-center justify-between gap-4 shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shrink-0 shadow-inner">
-            <Store className="w-5 h-5" />
+      {/* Top Header: Metric & Search / Add Product Bar */}
+      <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Metric on left */}
+        <div className="flex items-center gap-3.5 shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+            <Boxes className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-white tracking-wide">Customer Storefront & Dishes Sync Active</h2>
-              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-semibold text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Live 2-Way Sync
-              </span>
+              <span className="text-2xl font-bold text-white font-mono leading-none">{products.length}</span>
+              <span className="text-xs text-slate-300 font-medium">Total Catalog Dishes</span>
             </div>
-            <p className="text-xs text-slate-300 mt-0.5">
-              Connected to <strong className="text-indigo-300 font-mono">{partnerStoreUrl}</strong> & Firestore Catalog. Any dish additions or price edits here reflect on the customer website automatically.
-            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Across {categories.length} distinct categories</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Search input & Add Product button shifted to upper container */}
+        <div className="flex flex-1 items-center gap-2.5 max-w-2xl w-full">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search products by title or SKU code..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700/80 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+            />
+          </div>
+
           <button
-            onClick={() => setShowStorePreview(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-200 text-xs font-semibold border border-indigo-700/50 transition shadow-sm cursor-pointer"
+            onClick={() => onOpenEditModal(null)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow transition cursor-pointer shrink-0"
           >
-            <Eye className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Preview Customer Website</span>
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Product</span>
           </button>
-          <a
-            href={partnerStoreUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow-sm"
-          >
-            <Globe className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Open Customer Site</span>
-            <ExternalLink className="w-3 h-3 text-slate-400" />
-          </a>
-          <button
-            onClick={onSyncAllStock}
-            disabled={isSyncingStock}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition cursor-pointer"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingStock ? 'animate-spin' : ''}`} />
-            <span>{isSyncingStock ? 'Syncing...' : 'Push All to Customer Site'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Top Metrics Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Total Catalog SKUs</span>
-            <Boxes className="w-4 h-4 text-indigo-400" />
-          </div>
-          <p className="text-2xl font-bold text-white">{products.length}</p>
-          <p className="text-[11px] text-slate-400 mt-1">Across {categories.length} distinct categories</p>
-        </div>
-
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Warehouse Units</span>
-            <Boxes className="w-4 h-4 text-emerald-400" />
-          </div>
-          <p className="text-2xl font-bold text-emerald-300 font-mono">{totalStockUnits}</p>
-          <p className="text-[11px] text-slate-400 mt-1">Total on-hand units</p>
-        </div>
-
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Menu Valuation</span>
-            <span className="text-sm font-bold text-emerald-400">₹</span>
-          </div>
-          <p className="text-2xl font-bold text-emerald-300 font-mono">₹{totalCatalogValue.toLocaleString('en-IN')}</p>
-          <p className="text-[11px] text-slate-400 mt-1">Estimated catalog valuation</p>
-        </div>
-
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Reorder Attention</span>
-            <AlertTriangle className="w-4 h-4 text-amber-400" />
-          </div>
-          <p className="text-2xl font-bold text-amber-300 font-mono">{lowStockItems.length + outOfStockItems.length}</p>
-          <p className="text-[11px] text-amber-400/80 mt-1">
-            {outOfStockItems.length} out of stock, {lowStockItems.length} low
-          </p>
         </div>
       </div>
 
@@ -203,73 +211,6 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         </div>
       )}
 
-      {/* Control Bar */}
-      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
-        {/* Search */}
-        <div className="relative flex-1 min-w-[220px]">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search products by title or SKU code..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-          />
-        </div>
-
-        {/* Filters & Actions */}
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* Category */}
-          <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-300">
-            <Filter className="w-3.5 h-3.5 text-slate-400" />
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="bg-transparent border-none text-slate-200 focus:outline-none cursor-pointer"
-            >
-              <option value="all">All Categories</option>
-              {categories.map(c => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Status */}
-          <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-300">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-transparent border-none text-slate-200 focus:outline-none cursor-pointer"
-            >
-              <option value="all">All Stock Status</option>
-              <option value="in_stock">In Stock</option>
-              <option value="low_stock">Low Stock</option>
-              <option value="out_of_stock">Out of Stock</option>
-            </select>
-          </div>
-
-          {/* Push Stock to Partner API */}
-          <button
-            onClick={onSyncAllStock}
-            disabled={isSyncingStock}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700/60 font-medium transition disabled:opacity-50"
-            title="Push updated warehouse stock to external storefront API"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingStock ? 'animate-spin' : ''}`} />
-            <span>{isSyncingStock ? 'Pushing Sync...' : 'Sync Stock to Partner API'}</span>
-          </button>
-
-          {/* Add Product */}
-          <button
-            onClick={() => onOpenEditModal(null)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow transition"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Product</span>
-          </button>
-        </div>
-      </div>
-
       {/* Inventory Table */}
       <div className="rounded-xl border border-slate-800 bg-slate-900 overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
@@ -277,7 +218,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <thead className="bg-slate-950/80 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
               <tr>
                 <th className="py-3 px-4">Dish / Menu Item</th>
-                <th className="py-3 px-4">Category</th>
+                <th className="py-3 px-4">Available Quantity</th>
                 <th className="py-3 px-4">Price (₹ INR) & Margin</th>
                 <th className="py-3 px-4 text-right">Edit</th>
               </tr>
@@ -291,13 +232,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredProducts.map(prod => {
+                filteredProducts.map((prod, idx) => {
                   const marginPercent = Math.round(((prod.price - prod.costPrice) / prod.price) * 100);
                   const isLow = prod.stock <= prod.lowStockThreshold && prod.stock > 0;
                   const isOut = prod.stock === 0;
 
                   return (
-                    <tr key={prod.id} className="hover:bg-slate-800/40 transition">
+                    <tr key={prod.id ? `${prod.id}-${prod.sku || idx}` : `prod-${idx}`} className="hover:bg-slate-800/40 transition">
                       {/* Product Name (Customer Site Live Sync) */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-3">
@@ -313,14 +254,56 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                               <Boxes className="w-5 h-5" />
                             </div>
                           )}
-                          <div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-bold text-white max-w-[220px] truncate capitalize">{prod.name}</span>
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
-                                <Globe className="w-2.5 h-2.5 text-emerald-400" />
-                                Live on Customer Site
-                              </span>
-                            </div>
+                          <div className="flex-1 min-w-0">
+                            {editingNameId === prod.id ? (
+                              <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="text"
+                                  value={tempName}
+                                  onChange={(e) => setTempName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleSaveQuickName(prod.id);
+                                    } else if (e.key === 'Escape') {
+                                      setEditingNameId(null);
+                                    }
+                                  }}
+                                  autoFocus
+                                  placeholder="Dish title..."
+                                  className="px-2 py-1 bg-slate-950 border border-indigo-500 rounded text-xs text-white font-bold focus:outline-none focus:ring-1 focus:ring-indigo-400 w-48"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveQuickName(prod.id)}
+                                  className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-xs"
+                                  title="Save Dish Name (Instant Live Sync)"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingNameId(null)}
+                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer"
+                                  title="Cancel"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span 
+                                  className="font-bold text-white max-w-[280px] truncate capitalize hover:text-indigo-300 cursor-pointer flex items-center gap-1.5 group/dish text-sm"
+                                  title="Click to rename dish (Instant sync)"
+                                  onClick={() => {
+                                    setEditingNameId(prod.id);
+                                    setTempName(prod.name);
+                                  }}
+                                >
+                                  {prod.name}
+                                  <Edit className="w-3.5 h-3.5 text-slate-500 opacity-60 group-hover/dish:opacity-100 group-hover/dish:text-indigo-400 shrink-0 transition-opacity" />
+                                </span>
+                              </div>
+                            )}
                             {prod.description && (
                               <div className="text-[10px] text-slate-400 max-w-[240px] truncate mt-0.5" title={prod.description}>
                                 {prod.description}
@@ -330,11 +313,70 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         </div>
                       </td>
 
-                      {/* Category */}
-                      <td className="py-3.5 px-4">
-                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[11px]">
-                          {prod.category}
-                        </span>
+                      {/* Available Quantity (Manual Admin Edit with Live Sync) */}
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center bg-slate-950 border-2 border-slate-700 hover:border-indigo-500 focus-within:border-indigo-500 rounded-xl p-1 shadow-md transition-colors">
+                            <button
+                              type="button"
+                              onClick={() => handleStepStock(prod.id, prod.stock, -1)}
+                              disabled={prod.stock <= 0}
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:text-white bg-slate-900 hover:bg-rose-600 disabled:opacity-20 disabled:hover:bg-slate-900 transition-all cursor-pointer text-lg font-black active:scale-95 shadow-xs"
+                              title="Decrease quantity by 1"
+                            >
+                              −
+                            </button>
+                            <div className="relative flex items-center px-1">
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={getDisplayStock(prod)}
+                                onChange={(e) => handleStockChange(prod.id, e.target.value)}
+                                onBlur={() => handleStockCommit(prod.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    handleStockCommit(prod.id);
+                                    (e.target as HTMLInputElement).blur();
+                                  }
+                                }}
+                                className={`w-16 bg-transparent text-center font-mono font-black text-lg focus:outline-none py-0.5 tracking-tight ${
+                                  isOut ? 'text-rose-400' : isLow ? 'text-amber-300' : 'text-emerald-300'
+                                }`}
+                                title="Enter quantity available manually — updates live on brozza.vercel.app"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleStepStock(prod.id, prod.stock, 1)}
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:text-white bg-slate-900 hover:bg-emerald-600 transition-all cursor-pointer text-lg font-black active:scale-95 shadow-xs"
+                              title="Increase quantity by 1"
+                            >
+                              +
+                            </button>
+                          </div>
+
+                          {/* Quick Set 0 / Restock 25 button */}
+                          {prod.stock > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => onUpdateStock(prod.id, 0)}
+                              className="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-black transition cursor-pointer whitespace-nowrap active:scale-95 shadow-xs"
+                              title="Set quantity to 0 (Mark dish Sold Out on brozza.vercel.app)"
+                            >
+                              Set 0
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onUpdateStock(prod.id, 25)}
+                              className="px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 text-xs font-black transition cursor-pointer whitespace-nowrap active:scale-95 shadow-xs"
+                              title="Restock +25 units (Available on brozza.vercel.app)"
+                            >
+                              Restock 25
+                            </button>
+                          )}
+                        </div>
                       </td>
 
                       {/* Price & Margin (Pure Indian Rupees ₹) */}
@@ -472,8 +514,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <span className="text-slate-400">{products.length} dishes live in Firestore doc <code className="text-indigo-300 font-mono text-[11px]">orders/barozza_menu_catalog</code></span>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {products.slice(0, 6).map((p) => (
-                  <span key={p.id} className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700 whitespace-nowrap">
+                {products.slice(0, 6).map((p, idx) => (
+                  <span key={p.id ? `${p.id}-${p.sku || idx}` : `p-${idx}`} className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700 whitespace-nowrap">
                     {p.name} (₹{p.price})
                   </span>
                 ))}
@@ -483,14 +525,79 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               </div>
             </div>
 
+            {/* Cafe Closure Live Warning in Storefront Preview */}
+            {cafeStatus && !cafeStatus.isOpen && (
+              <div className="px-4 py-3 bg-black border-b-2 border-neutral-700 flex flex-wrap items-center justify-between gap-3 text-xs text-white">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+                  <span className="font-mono font-bold text-rose-300 uppercase">🔒 Cafe Closed Active:</span>
+                  <span className="text-neutral-200">
+                    "currently cafe is closed. so I'm sorry boss ! . it will open at <strong className="text-amber-300 font-mono">{cafeStatus.formattedReopenTime}</strong>."
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {onSwitchToCustomerTab && (
+                    <button
+                      onClick={() => {
+                        setShowStorePreview(false);
+                        onSwitchToCustomerTab();
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 font-bold transition shadow cursor-pointer"
+                    >
+                      Open Customer Dashboard Tab (B&W)
+                    </button>
+                  )}
+                  {onReopenCafeEarly && (
+                    <button
+                      onClick={onReopenCafeEarly}
+                      className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white font-bold border border-neutral-600 transition cursor-pointer"
+                    >
+                      Reopen Cafe Early
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Live Storefront Iframe */}
-            <div className="flex-1 w-full bg-slate-950 relative">
+            <div className="flex-1 w-full bg-slate-950 relative overflow-hidden">
               <iframe
                 src={partnerStoreUrl}
                 title="Customer Storefront Live View"
-                className="w-full h-full border-0"
+                className={`w-full h-full border-0 transition-all duration-500 ${
+                  cafeStatus && !cafeStatus.isOpen ? 'filter grayscale contrast-125' : ''
+                }`}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
+
+              {/* Floating B&W Status & Product Alert Test Helper */}
+              {cafeStatus && !cafeStatus.isOpen && (
+                <div 
+                  onClick={() => setShowClosedNoticeModal(true)}
+                  className="absolute bottom-5 right-5 z-20 p-3.5 rounded-xl bg-black/95 border-2 border-neutral-700 text-white shadow-2xl backdrop-blur-md cursor-pointer hover:border-neutral-500 transition max-w-md group"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-700 flex items-center justify-center shrink-0 mt-0.5">
+                      <Lock className="w-4 h-4 text-rose-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                        <span className="text-xs font-bold text-white uppercase tracking-wider">
+                          Storefront In Black & White Mode
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-neutral-300 mt-1 leading-snug">
+                        "currently cafe is closed. so I'm sorry boss ! . it will open at <strong className="text-amber-300 font-mono">{cafeStatus.formattedReopenTime}</strong>."
+                      </p>
+                      <div className="mt-2 text-[10px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center gap-1">
+                        <span>Click to preview product closure dialog</span>
+                        <span>→</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Footer Status */}
@@ -500,8 +607,77 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <span className="text-emerald-300 font-medium">Automatic bi-directional synchronization active</span>
               </div>
               <p className="text-[11px] text-slate-500">
-                All newly created dishes from the admin dashboard are instantly registered and sent to the customer site.
+                All newly created dishes and cafe status from the admin dashboard are instantly registered and sent to brozza.vercel.app.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Product Alert Dialog (Shown when clicking products while cafe is closed) */}
+      {showClosedNoticeModal && cafeStatus && !cafeStatus.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-black border-2 border-neutral-700 rounded-2xl max-w-md w-full p-6 text-white shadow-2xl relative animate-in fade-in zoom-in duration-200">
+            <button
+              onClick={() => setShowClosedNoticeModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg bg-neutral-900 text-neutral-400 hover:text-white transition cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700 flex items-center justify-center text-rose-400">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="text-[10px] font-mono font-bold tracking-widest text-rose-400 uppercase bg-rose-950/50 border border-rose-800/40 px-2 py-0.5 rounded">
+                  ORDERING LOCKED
+                </span>
+                <h3 className="text-base font-bold text-white mt-1">Cafe Currently Closed</h3>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 mb-5">
+              <p className="text-xs text-neutral-400 uppercase tracking-wider font-mono mb-1">Notice to Customers:</p>
+              <p className="text-sm font-medium text-white leading-relaxed">
+                "currently cafe is closed. so I'm sorry boss ! . it will open at <strong className="text-amber-300 font-mono font-bold">{cafeStatus.formattedReopenTime}</strong>."
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-neutral-400 mb-6 bg-neutral-900/60 p-3 rounded-xl border border-neutral-800">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Scheduled Reopen Time: <strong className="text-white font-mono">{cafeStatus.formattedReopenTime}</strong></span>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <a
+                href={partnerStoreUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-bold text-xs hover:bg-neutral-200 transition text-center flex items-center justify-center gap-2"
+              >
+                <span>Open brozza.vercel.app in New Tab</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+
+              {onReopenCafeEarly && (
+                <button
+                  onClick={() => {
+                    setShowClosedNoticeModal(false);
+                    onReopenCafeEarly();
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs border border-neutral-600 transition cursor-pointer"
+                >
+                  Reopen Cafe Early as Rohit Admin
+                </button>
+              )}
+
+              <button
+                onClick={() => setShowClosedNoticeModal(false)}
+                className="w-full py-2 text-xs text-neutral-400 hover:text-white transition"
+              >
+                Dismiss Notice
+              </button>
             </div>
           </div>
         </div>

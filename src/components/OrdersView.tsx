@@ -28,12 +28,13 @@ import {
   LayoutGrid,
   List,
   Flame,
-  TrendingUp,
   ChevronDown,
   User,
-  Lock
+  Lock,
+  Power,
+  Trash2
 } from 'lucide-react';
-import { Order, OrderStatus, ParcelType, PaymentStatus } from '../types';
+import { Order, OrderStatus, ParcelType, PaymentStatus, CafeStatus, OrderItem } from '../types';
 
 interface OrdersViewProps {
   orders: Order[];
@@ -43,6 +44,12 @@ interface OrdersViewProps {
   onCreateSupportTicket: (order: Order) => void;
   onOpenCreateOrder: () => void;
   onOpenSyncGuide?: () => void;
+  cafeStatus?: CafeStatus;
+  onOpenCafeStatusModal?: () => void;
+  onReopenCafeEarly?: () => Promise<void>;
+  onSwitchToCustomerView?: () => void;
+  onPurgeDummyOrders?: () => void;
+  onSwitchToAnalytics?: () => void;
 }
 
 // Stylized 3D Delivery Box Icon matching image_16.png
@@ -141,7 +148,6 @@ const CodBrandIcon: React.FC = () => (
       <Lock className="w-2.5 h-2.5 text-slate-300" />
       COD
     </span>
-    <span className="text-xs font-bold text-slate-300 tracking-wider">COD</span>
   </div>
 );
 
@@ -152,7 +158,13 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   onUpdateStatus,
   onCreateSupportTicket,
   onOpenCreateOrder,
-  onOpenSyncGuide
+  onOpenSyncGuide,
+  cafeStatus,
+  onOpenCafeStatusModal,
+  onReopenCafeEarly,
+  onSwitchToCustomerView,
+  onPurgeDummyOrders,
+  onSwitchToAnalytics
 }) => {
   const [viewLayout, setViewLayout] = useState<'cards' | 'table'>('cards');
   const [searchTerm, setSearchTerm] = useState('');
@@ -165,14 +177,46 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   const [showDailyBreakdown, setShowDailyBreakdown] = useState<boolean>(false);
   const [previewImage, setPreviewImage] = useState<{ url: string; name: string; price?: number; quantity?: number } | null>(null);
 
-  // Helper to ensure only authentic customer dashboard parcels are processed
+  // Helper to ensure ONLY authentic customer dashboard parcels are processed
+  // STRICTLY blocks any unwanted junks and automatically created dummy parcels
   const isCustomerOrder = (ord: Order) => {
-    return (
-      ord.id !== 'ord-cod-01' && 
-      ord.id !== 'ord-upi-02' && 
-      ord.orderNumber !== 'ORD-9821' && 
-      ord.orderNumber !== 'ORD-9822'
-    );
+    if (!ord) return false;
+    const idLower = (ord.id || '').toLowerCase();
+    const orderNumLower = (ord.orderNumber || '').toLowerCase();
+    const custNameLower = (ord.customer?.name || '').toLowerCase();
+    const notesLower = (ord.notes || '').toLowerCase();
+
+    // 1. Block legacy dummy mock IDs
+    if (
+      ord.id === 'ord-cod-01' || 
+      ord.id === 'ord-upi-02' || 
+      ord.orderNumber === 'ORD-9821' || 
+      ord.orderNumber === 'ORD-9822'
+    ) {
+      return false;
+    }
+
+    // 2. Block any dummy/test markers in id, order number, name, notes
+    if (
+      idLower.includes('dummy') || idLower.includes('test') ||
+      orderNumLower.includes('dummy') || orderNumLower.includes('test') ||
+      custNameLower === 'dummy' || custNameLower === 'test' || custNameLower === 'test customer' ||
+      notesLower.includes('diagnostic console')
+    ) {
+      return false;
+    }
+
+    // 3. Must have valid items (at least one real product)
+    if (!ord.items || ord.items.length === 0) {
+      return false;
+    }
+
+    // 4. Must have valid non-zero amount
+    if (!ord.totalAmount || ord.totalAmount <= 0) {
+      return false;
+    }
+
+    return true;
   };
 
   // Only real customer orders
@@ -358,6 +402,19 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       });
   }, [activeOrders, searchTerm, statusFilter, paymentMethodFilter, paymentStatusFilter, parcelTypeFilter, sortBy]);
 
+  // Pure customer order parcels: strictly and only the items chosen by the user appear in the order box
+  const consolidatedParcels = useMemo<Order[]>(() => {
+    return filteredOrders.map(ord => ({
+      ...ord,
+      // Strictly maintain only the items chosen by the user for this order - never merge or add items from other orders
+      items: ord.items || [],
+      isMultipleOrders: false,
+      mergedOrderCount: 1,
+      mergedOrderNumbers: [ord.orderNumber],
+      mergedOrderIds: [ord.id]
+    }));
+  }, [filteredOrders]);
+
   // Metrics (strictly customer parcels only)
   const totalRevenue = validCustomerOrders.reduce((sum, o) => sum + (o.status !== 'cancelled' ? o.totalAmount : 0), 0);
   const pendingReceiveCount = validCustomerOrders.filter(o => o.status === 'pending').length;
@@ -520,19 +577,20 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   // Fast Worker Status Transitions
   const handleWorkerNextAction = async (ord: Order, e: React.MouseEvent) => {
     e.stopPropagation();
+    const targetId = ord.mergedOrderIds && ord.mergedOrderIds.length > 0 ? ord.mergedOrderIds.join(',') : ord.id;
     if (ord.status === 'pending') {
-      await onUpdateStatus(ord.id, 'received', {
+      await onUpdateStatus(targetId, 'received', {
         assignedWorker: 'Delivery Partner Hub',
         parcelReceivedAt: new Date().toISOString()
       });
     } else if (ord.status === 'received') {
-      await onUpdateStatus(ord.id, 'processing');
+      await onUpdateStatus(targetId, 'processing');
     } else if (ord.status === 'processing') {
-      await onUpdateStatus(ord.id, 'out_for_delivery', {
+      await onUpdateStatus(targetId, 'out_for_delivery', {
         trackingNumber: `RDR-${Math.floor(100 + Math.random() * 900)}`
       });
     } else if (ord.status === 'out_for_delivery') {
-      await onUpdateStatus(ord.id, 'delivered', {
+      await onUpdateStatus(targetId, 'delivered', {
         deliveredAt: new Date().toISOString(),
         paymentStatus: 'clear',
         cashCollected: true
@@ -542,7 +600,8 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const handleMarkPaymentClear = async (ord: Order, e: React.MouseEvent) => {
     e.stopPropagation();
-    await onUpdateStatus(ord.id, ord.status, {
+    const targetId = ord.mergedOrderIds && ord.mergedOrderIds.length > 0 ? ord.mergedOrderIds.join(',') : ord.id;
+    await onUpdateStatus(targetId, ord.status, {
       paymentStatus: 'clear',
       cashCollected: true
     });
@@ -550,12 +609,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* Main Title 'TODAY'S OVERVIEW' */}
-      <h2 className="text-center font-bold tracking-widest text-slate-300 uppercase text-xs sm:text-sm py-1">
-        TODAY'S OVERVIEW
-      </h2>
-
-      {/* 4-Panel Dark Grey Grid matching image_16.png */}
+      {/* 4-Panel Dark Grey Grid matching image */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
         {/* Panel 1 (Top-Left): TODAY'S TOTAL ORDERS */}
         <div className={`p-4 sm:p-5 rounded-2xl ${isDarkMode ? 'bg-[#161922] border-slate-800/80 shadow-md' : 'bg-slate-900 border-slate-800 text-white shadow-md'} border flex flex-col justify-between`}>
@@ -600,21 +654,24 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
             PAYMENT METHODS
           </div>
-          <div className="grid grid-cols-2 divide-x divide-slate-800/90 mt-3 pt-1">
-            {/* UPI Sub-section */}
-            <div className="pr-3">
-              <UpiBrandIcon />
-              <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
-                {todaysUpiOrdersCount}
+          <div className="flex items-center justify-between mt-3">
+            <div className="grid grid-cols-2 divide-x divide-slate-800/90 pt-1 flex-1">
+              {/* UPI Sub-section */}
+              <div className="pr-3">
+                <UpiBrandIcon />
+                <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
+                  {todaysUpiOrdersCount}
+                </div>
+              </div>
+              {/* COD Sub-section */}
+              <div className="pl-4 sm:pl-6">
+                <CodBrandIcon />
+                <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
+                  {todaysCodOrdersCount}
+                </div>
               </div>
             </div>
-            {/* COD Sub-section */}
-            <div className="pl-4 sm:pl-6">
-              <CodBrandIcon />
-              <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
-                {todaysCodOrdersCount}
-              </div>
-            </div>
+            <DeliveryBox3DIcon />
           </div>
         </div>
 
@@ -623,28 +680,34 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
             REVENUE BREAKDOWN
           </div>
-          <div className="grid grid-cols-2 divide-x divide-slate-800/90 mt-3 pt-1">
-            {/* UPI Amount Sub-section */}
-            <div className="pr-3">
-              <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
-                UPI AMOUNT
+          <div className="flex items-center justify-between mt-3">
+            <div className="grid grid-cols-2 divide-x divide-slate-800/90 pt-1 flex-1">
+              {/* UPI Amount Sub-section */}
+              <div className="pr-3">
+                <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
+                  UPI Received
+                </div>
+                <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
+                  ₹{todaysUpiTotalAmount.toFixed(2)}
+                </div>
               </div>
-              <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
-                ₹{todaysUpiTotalAmount.toFixed(2)}
+              {/* COD Pending Amount Sub-section */}
+              <div className="pl-4 sm:pl-6">
+                <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
+                  COD Pending
+                </div>
+                <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
+                  ₹{todaysCodPendingAmount.toFixed(2)}
+                </div>
               </div>
             </div>
-            {/* COD Amount Sub-section */}
-            <div className="pl-4 sm:pl-6">
-              <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
-                COD AMOUNT
-              </div>
-              <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
-                ₹{todaysCodPendingAmount.toFixed(2)}
-              </div>
-            </div>
+            <CoinsRevenue3DIcon />
           </div>
         </div>
       </div>
+
+      {/* Orders Management Anchor & Section */}
+      <div id="orders-management-section" className="space-y-3 pt-2">
 
       {/* Search & Filter Toolbar */}
 
@@ -720,11 +783,27 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               <List className="w-3.5 h-3.5" />
             </button>
           </div>
+
+          {/* Purge unwanted junks / dummy parcels */}
+          {onPurgeDummyOrders && (
+            <button
+              onClick={onPurgeDummyOrders}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition ${
+                isDarkMode 
+                  ? 'bg-rose-950/40 border-rose-800/60 text-rose-300 hover:bg-rose-900/60' 
+                  : 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+              }`}
+              title="Purge unwanted junks and dummy parcels"
+            >
+              <Trash2 className="w-3 h-3 text-rose-400" />
+              <span className="hidden sm:inline">Purge Dummy Junks</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Orders Content: Empty State vs Cards vs Table */}
-      {filteredOrders.length === 0 ? (
+      {consolidatedParcels.length === 0 ? (
         <div className={`p-12 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-xs'} border text-center space-y-4`}>
           <div className={`w-16 h-16 rounded-2xl ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'} border mx-auto flex items-center justify-center text-indigo-500`}>
             <Package className="w-8 h-8" />
@@ -736,7 +815,8 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       ) : viewLayout === 'cards' ? (
         /* WORKER PARCEL CARDS VIEW (Blinkit / Domino's Delivery Partner Format) */
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredOrders.map((ord) => {
+          {consolidatedParcels.map((ord) => {
+            const isMultiple = Boolean(ord.isMultipleOrders && (ord.mergedOrderCount || 0) > 1);
             const parcelMeta = getParcelBadge(ord.parcelType);
             const isCOD = ord.paymentMethod === 'cash_on_delivery' || 
                           ord.paymentMethod.toLowerCase().includes('cash') ||
@@ -762,12 +842,22 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               >
                 {/* Top Header Banner matching reference image */}
                 <div className={`flex items-center gap-3 pb-3 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-100'}`}>
-                  <div className={`w-10 h-10 rounded-2xl ${isDarkMode ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-emerald-50 text-emerald-600'} flex items-center justify-center shrink-0`}>
+                  <div className={`w-10 h-10 rounded-2xl ${
+                    isDarkMode 
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                      : 'bg-emerald-50 text-emerald-600'
+                  } flex items-center justify-center shrink-0`}>
                     <Package className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className={`text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Parcel Received</h3>
-                    <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>The order has been successfully received.</p>
+                    <div className="flex items-center gap-2">
+                      <h3 className={`text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        Parcel Received • #{ord.orderNumber}
+                      </h3>
+                    </div>
+                    <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                      The order has been successfully received.
+                    </p>
                   </div>
                 </div>
 
@@ -808,45 +898,60 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                   </div>
                 </div>
 
-                {/* Item Details Card */}
+                {/* Item Details Card - Shows ALL products ordered by customer */}
                 <div className={`rounded-2xl ${isDarkMode ? 'text-slate-200' : 'text-slate-900'} space-y-2`}>
-                  <div className={`flex items-center gap-2 text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} uppercase tracking-wider`}>
-                    <div className={`w-6 h-6 rounded-lg ${isDarkMode ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-purple-50 text-purple-600'} flex items-center justify-center`}>
-                      {getParcelIcon(ord.parcelType)}
+                  <div className="flex items-center justify-between">
+                    <div className={`flex items-center gap-2 text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} uppercase tracking-wider`}>
+                      <div className={`w-6 h-6 rounded-lg ${
+                        isDarkMode 
+                          ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' 
+                          : 'bg-purple-50 text-purple-600'
+                      } flex items-center justify-center`}>
+                        {getParcelIcon(ord.parcelType)}
+                      </div>
+                      <span>
+                        Item Details ({ord.items.length})
+                      </span>
                     </div>
-                    <span>Item Details ({ord.items.length})</span>
+
+                    <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded ${
+                      isDarkMode ? 'bg-slate-800 text-slate-300 border border-slate-700' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      {ord.items.reduce((s, it) => s + (it.quantity || 1), 0)} Qty Total
+                    </span>
                   </div>
 
                   <div className="space-y-2">
                     {ord.items.map((item, idx) => {
                       const itemImg = item.image || (item as any).imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150&q=80';
                       return (
-                        <div key={idx} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3.5 rounded-2xl ${isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-white border-slate-100 text-slate-900'} border shadow-xs`}>
-                          <div className="flex items-center gap-4">
+                        <div key={item.id ? `${item.id}-${idx}` : `item-${idx}`} className={`flex items-center justify-between gap-3 p-3 rounded-2xl ${isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-white border-slate-100 text-slate-900'} border shadow-xs overflow-hidden`}>
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
                             <img
                               src={itemImg}
                               alt={item.name}
-                              className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border border-slate-200 shrink-0 shadow-md"
+                              className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl object-cover border border-slate-200/60 shrink-0 shadow-xs"
                               onError={(e) => {
                                 (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150&q=80';
                               }}
                               referrerPolicy="no-referrer"
                             />
-                            <div>
-                              <div className={`text-lg sm:text-xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{item.name}</div>
-                              <div className={`text-base ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} font-mono`}>₹{item.price.toFixed(2)} each</div>
+                            <div className="min-w-0 flex-1">
+                              <div className={`text-sm sm:text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} leading-snug line-clamp-2`}>{item.name}</div>
+                              <div className={`text-xs sm:text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} font-mono mt-0.5`}>₹{item.price.toFixed(2)} each</div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                            <div className={`px-3 py-1 rounded-xl ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-900'} border text-center`}>
-                              <div className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase font-bold`}>Qty</div>
-                              <div className={`text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} font-mono`}>{item.quantity}</div>
+                          {/* Vertical Arrangement for Qty & Total Price to prevent overflowing outside parcel box */}
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <div className={`px-2.5 py-1 rounded-xl ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-900'} border flex flex-col items-center justify-center text-center min-w-[70px]`}>
+                              <div className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase font-bold leading-tight`}>Qty</div>
+                              <div className={`text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} font-mono leading-tight`}>{item.quantity}</div>
                             </div>
 
-                            <div className={`px-4 py-1.5 rounded-xl ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700'} border text-right`}>
-                              <div className={`text-[10px] ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'} uppercase font-bold`}>Total</div>
-                              <div className={`text-sm sm:text-base font-extrabold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'} font-mono`}>₹{(item.price * item.quantity).toFixed(2)}</div>
+                            <div className={`px-2.5 py-1 rounded-xl ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700'} border flex flex-col items-center justify-center text-center min-w-[70px]`}>
+                              <div className={`text-[9px] ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'} uppercase font-bold leading-tight`}>Total</div>
+                              <div className={`text-xs sm:text-sm font-extrabold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'} font-mono leading-tight whitespace-nowrap`}>₹{(item.price * item.quantity).toFixed(2)}</div>
                             </div>
                           </div>
                         </div>
@@ -941,7 +1046,8 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80 text-slate-300">
-                {filteredOrders.map((ord) => {
+                {consolidatedParcels.map((ord) => {
+                  const isMultiple = Boolean(ord.isMultipleOrders && (ord.mergedOrderCount || 0) > 1);
                   const parcelMeta = getParcelBadge(ord.parcelType);
                   const isCOD = ord.paymentMethod === 'cash_on_delivery' || 
                                 ord.paymentMethod.toLowerCase().includes('cash') ||
@@ -966,7 +1072,9 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                     >
                       {/* Customer */}
                       <td className="py-3.5 px-4">
-                        <div className="font-semibold text-white">{ord.customer.name}</div>
+                        <div className="font-semibold text-white flex items-center gap-1.5 flex-wrap">
+                          <span>{ord.customer.name}</span>
+                        </div>
                         <div className="text-[11px] text-slate-400 font-mono">
                           {ord.customer.phone}
                         </div>
@@ -1097,15 +1205,6 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
         )}
       </div>
 
-      {/* Footer Info */}
-      <div className={`p-3 ${isDarkMode ? 'bg-black border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-600'} border rounded-xl flex flex-wrap items-center justify-between text-xs`}>
-        <div>
-          Showing <span className="text-white font-bold">{filteredOrders.length}</span> of <span className="text-white font-bold">{orders.length}</span> live orders
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>Target Firebase: <strong>brozza-1f6be</strong></span>
-        </div>
       </div>
 
       {/* Floating Image Preview Lightbox Modal */}

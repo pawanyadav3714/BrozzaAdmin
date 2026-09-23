@@ -3,7 +3,7 @@ import { Order, Product, SupportTicket, SyncLog, ApiSyncConfig } from '../types'
 export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-dosha',
-    dishId: '13',
+    dishId: '19',
     sku: 'SWEET',
     name: 'dosha sambar',
     category: 'snakss',
@@ -210,60 +210,100 @@ export const INITIAL_PRODUCTS: Product[] = [
     description: 'A classic street food favorite with fluffy egg and zesty red onions.'
   },
   {
-    id: 'prod-1',
-    sku: 'BLK-MILK-01',
-    name: 'Farm Fresh Organic Full Cream Milk (1L)',
-    category: 'Daily Dairy & Essentials',
-    price: 68.00,
-    costPrice: 48.00,
-    stock: 45,
+    id: 'prod-brz-13',
+    dishId: '13',
+    sku: 'BRZ-DISH-13',
+    name: 'Paneer Roll',
+    category: 'Rolls',
+    price: 50.00,
+    costPrice: 24.00,
+    stock: 35,
+    lowStockThreshold: 8,
+    status: 'in_stock',
+    syncedWithExternalStore: true,
+    lastSyncedAt: new Date().toISOString(),
+    imageUrl: 'https://brozza.vercel.app/images/paneerchili.png',
+    description: 'Juicy paneer chunks wrapped with crunchy veggies and sauces.'
+  },
+  {
+    id: 'prod-brz-14',
+    dishId: '14',
+    sku: 'BRZ-DISH-14',
+    name: 'Cold Coffee with Ice Cream',
+    category: 'Beverages',
+    price: 90.00,
+    costPrice: 40.00,
+    stock: 40,
     lowStockThreshold: 10,
     status: 'in_stock',
     syncedWithExternalStore: true,
     lastSyncedAt: new Date().toISOString(),
-    imageUrl: 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=300&q=80'
+    imageUrl: 'https://brozza.vercel.app/images/coldcoffe.png',
+    description: 'Blended chilled coffee topped with rich vanilla ice cream.'
   },
   {
-    id: 'prod-2',
-    sku: 'DOM-PIZZA-CH',
-    name: 'Domino’s Farmhouse Cheese Burst Pizza (Medium)',
-    category: 'Hot Food & Kitchen',
-    price: 459.00,
-    costPrice: 210.00,
-    stock: 28,
-    lowStockThreshold: 5,
-    status: 'in_stock',
-    syncedWithExternalStore: true,
-    lastSyncedAt: new Date().toISOString(),
-    imageUrl: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=300&q=80'
-  },
-  {
-    id: 'prod-3',
-    sku: 'BLK-BREAD-02',
-    name: 'Artisan Multigrain Sourdough Bread (400g)',
-    category: 'Bakery & Breakfast',
-    price: 85.00,
-    costPrice: 45.00,
-    stock: 18,
+    id: 'prod-brz-15',
+    dishId: '15',
+    sku: 'BRZ-DISH-15',
+    name: 'Veg Fried Rice',
+    category: 'Chinese',
+    price: 60.00,
+    costPrice: 28.00,
+    stock: 30,
     lowStockThreshold: 6,
     status: 'in_stock',
     syncedWithExternalStore: true,
     lastSyncedAt: new Date().toISOString(),
-    imageUrl: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&q=80'
+    imageUrl: 'https://brozza.vercel.app/images/chow.png',
+    description: 'Fragrant basmati rice wok-tossed with fresh garden vegetables.'
   },
   {
-    id: 'prod-4',
-    sku: 'TECH-CHG-65W',
-    name: '65W GaN Fast Charger & Type-C Braided Cable',
-    category: 'Electronics & Accessories',
-    price: 1299.00,
-    costPrice: 650.00,
-    stock: 12,
-    lowStockThreshold: 4,
+    id: 'prod-brz-16',
+    dishId: '16',
+    sku: 'BRZ-DISH-16',
+    name: 'Schezwan Noodles',
+    category: 'Chinese',
+    price: 70.00,
+    costPrice: 32.00,
+    stock: 30,
+    lowStockThreshold: 6,
     status: 'in_stock',
     syncedWithExternalStore: true,
     lastSyncedAt: new Date().toISOString(),
-    imageUrl: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=300&q=80'
+    imageUrl: 'https://brozza.vercel.app/images/eggchowminn.png',
+    description: 'Fiery wok-tossed noodles in pungent Schezwan chili garlic sauce.'
+  },
+  {
+    id: 'prod-brz-17',
+    dishId: '17',
+    sku: 'BRZ-DISH-17',
+    name: 'Cheesy Garlic Bread',
+    category: 'Italian',
+    price: 85.00,
+    costPrice: 40.00,
+    stock: 25,
+    lowStockThreshold: 5,
+    status: 'in_stock',
+    syncedWithExternalStore: true,
+    lastSyncedAt: new Date().toISOString(),
+    imageUrl: 'https://brozza.vercel.app/images/pastaa.png',
+    description: 'Toasted artisanal bread loaded with melted mozzarella and herbs.'
+  },
+  {
+    id: 'prod-brz-18',
+    dishId: '18',
+    sku: 'BRZ-DISH-18',
+    name: 'Unscripted Special Banner Item',
+    category: 'Specials',
+    price: 120.00,
+    costPrice: 55.00,
+    stock: 20,
+    lowStockThreshold: 5,
+    status: 'in_stock',
+    syncedWithExternalStore: true,
+    lastSyncedAt: new Date().toISOString(),
+    imageUrl: 'https://brozza.vercel.app/images/unscriptedBanner.jpg',
+    description: 'Featured house special creation displayed via unscripted banner.'
   }
 ];
 
@@ -326,3 +366,83 @@ export const INITIAL_API_CONFIG: ApiSyncConfig = {
   firestoreDatabaseId: undefined,
   projectId: 'brozza-1f6be'
 };
+
+/**
+ * Normalizes and deduplicates an array of products to guarantee
+ * unique keys, valid SKUs, and unambiguous dish IDs across all views.
+ */
+export function deduplicateProducts(rawProducts: Product[]): Product[] {
+  if (!Array.isArray(rawProducts)) return [];
+  const seenKeys = new Set<string>();
+  const result: Product[] = [];
+
+  for (const p of rawProducts) {
+    if (!p) continue;
+    const nameKey = (p.name || '').trim().toLowerCase();
+    const dishIdKey = p.dishId ? `dish-${p.dishId}` : '';
+    const skuKey = p.sku ? `sku-${p.sku.toLowerCase()}` : '';
+
+    // Check if this product is already in our list
+    if (
+      (nameKey && seenKeys.has(nameKey)) ||
+      (dishIdKey && seenKeys.has(dishIdKey)) ||
+      (skuKey && seenKeys.has(skuKey))
+    ) {
+      continue;
+    }
+
+    if (nameKey) seenKeys.add(nameKey);
+    if (dishIdKey) seenKeys.add(dishIdKey);
+    if (skuKey) seenKeys.add(skuKey);
+
+    // Extract dish number if any
+    const numberMatch = (p.dishId || p.sku || p.id || '').match(/\d+/);
+    const dishNumber = numberMatch ? parseInt(numberMatch[0], 10) : result.length + 1;
+    const canonicalId = p.id && !p.id.match(/^item_\d+$/) ? p.id : `prod-brz-${dishNumber}`;
+
+    result.push({
+      ...p,
+      id: canonicalId,
+      dishId: p.dishId || String(dishNumber),
+      sku: p.sku || `BRZ-DISH-${String(dishNumber).padStart(2, '0')}`,
+      imageUrl: p.imageUrl || (p as any).image || '/images/frenchh.png',
+      status: p.status || 'in_stock',
+      stock: typeof p.stock === 'number' ? p.stock : 25
+    });
+  }
+
+  return result;
+}
+
+export interface CanonicalDish {
+  id: string;
+  dishId: string;
+  name: string;
+  price: number;
+  category: string;
+  description: string;
+  image: string;
+  imageUrl: string;
+}
+
+export const BAROZZA_CANONICAL_DISHES: CanonicalDish[] = [
+  { id: "1", dishId: "1", name: "French Fries", price: 30, category: "Starters", description: "Crispy golden fries served hot and fresh.", image: "https://brozza.vercel.app/images/frenchh.png", imageUrl: "https://brozza.vercel.app/images/frenchh.png" },
+  { id: "2", dishId: "2", name: "Veg Chow Mein", price: 45, category: "Chinese", description: "Stir-fried noodles with fresh vegetables and aromatic spices.", image: "https://brozza.vercel.app/images/chow.png", imageUrl: "https://brozza.vercel.app/images/chow.png" },
+  { id: "3", dishId: "3", name: "Egg Chow Mein", price: 55, category: "Chinese", description: "Delicious stir-fried noodles with scrambled eggs and seasonal veggies.", image: "https://brozza.vercel.app/images/eggchowminn.png", imageUrl: "https://brozza.vercel.app/images/eggchowminn.png" },
+  { id: "4", dishId: "4", name: "Creamy Pasta", price: 65, category: "Italian", description: "Italian pasta cooked in a rich, creamy sauce with exotic herbs.", image: "https://brozza.vercel.app/images/pastaa.png", imageUrl: "https://brozza.vercel.app/images/pastaa.png" },
+  { id: "5", dishId: "5", name: "Paneer Chilli", price: 80, category: "Chinese", description: "Spicy cottage cheese chunks tossed with bell peppers and onions.", image: "https://brozza.vercel.app/images/paneerchili.png", imageUrl: "https://brozza.vercel.app/images/paneerchili.png" },
+  { id: "6", dishId: "6", name: "Steamed Veg Momos", price: 40, category: "Chinese", description: "Soft and succulent dumplings filled with garden-fresh vegetables.", image: "https://brozza.vercel.app/images/momos.png", imageUrl: "https://brozza.vercel.app/images/momos.png" },
+  { id: "7", dishId: "7", name: "Fried Veg Momos", price: 45, category: "Chinese", description: "Crispy fried dumplings served with a hot and spicy red chutney.", image: "https://brozza.vercel.app/images/fried.png", imageUrl: "https://brozza.vercel.app/images/fried.png" },
+  { id: "8", dishId: "8", name: "Baby Corn Chilli", price: 70, category: "Chinese", description: "Tender baby corn tossed in a spicy and tangy Manchurian sauce.", image: "https://brozza.vercel.app/images/babycornchili.png", imageUrl: "https://brozza.vercel.app/images/babycornchili.png" },
+  { id: "9", dishId: "9", name: "Mushroom Chilli", price: 75, category: "Chinese", description: "Fresh mushrooms stir-fried with onions, capsicum, and oriental spices.", image: "https://brozza.vercel.app/images/masroomchili.png", imageUrl: "https://brozza.vercel.app/images/masroomchili.png" },
+  { id: "10", dishId: "10", name: "Veg Manchurian", price: 65, category: "Chinese", description: "Golden vegetable balls tossed in a flavorful soy-based ginger sauce.", image: "https://brozza.vercel.app/images/menchurian.png", imageUrl: "https://brozza.vercel.app/images/menchurian.png" },
+  { id: "11", dishId: "11", name: "Veg Roll", price: 35, category: "Rolls", description: "Freshly sautéed vegetables wrapped in a soft, flaky paratha.", image: "https://brozza.vercel.app/images/vegrol.png", imageUrl: "https://brozza.vercel.app/images/vegrol.png" },
+  { id: "12", dishId: "12", name: "Egg Roll", price: 40, category: "Rolls", description: "A classic street food favorite with fluffy egg and zesty red onions.", image: "https://brozza.vercel.app/images/eggrol.png", imageUrl: "https://brozza.vercel.app/images/eggrol.png" },
+  { id: "13", dishId: "13", name: "Paneer Roll", price: 50, category: "Rolls", description: "Juicy paneer chunks wrapped with crunchy veggies and sauces.", image: "https://brozza.vercel.app/images/paneerchili.png", imageUrl: "https://brozza.vercel.app/images/paneerchili.png" },
+  { id: "14", dishId: "14", name: "Cold Coffee with Ice Cream", price: 90, category: "Beverages", description: "Blended chilled coffee topped with rich vanilla ice cream.", image: "https://brozza.vercel.app/images/coldcoffe.png", imageUrl: "https://brozza.vercel.app/images/coldcoffe.png" },
+  { id: "15", dishId: "15", name: "Veg Fried Rice", price: 60, category: "Chinese", description: "Fragrant basmati rice wok-tossed with fresh garden vegetables.", image: "https://brozza.vercel.app/images/chow.png", imageUrl: "https://brozza.vercel.app/images/chow.png" },
+  { id: "16", dishId: "16", name: "Schezwan Noodles", price: 70, category: "Chinese", description: "Fiery wok-tossed noodles in pungent Schezwan chili garlic sauce.", image: "https://brozza.vercel.app/images/eggchowminn.png", imageUrl: "https://brozza.vercel.app/images/eggchowminn.png" },
+  { id: "17", dishId: "17", name: "Cheesy Garlic Bread", price: 85, category: "Italian", description: "Toasted artisanal bread loaded with melted mozzarella and herbs.", image: "https://brozza.vercel.app/images/pastaa.png", imageUrl: "https://brozza.vercel.app/images/pastaa.png" },
+  { id: "18", dishId: "18", name: "Unscripted Special Banner Item", price: 120, category: "Specials", description: "Featured house special creation displayed via unscripted banner.", image: "https://brozza.vercel.app/images/unscriptedBanner.jpg", imageUrl: "https://brozza.vercel.app/images/unscriptedBanner.jpg" }
+];
+
