@@ -129,8 +129,9 @@ export const CafeStatusModal: React.FC<CafeStatusModalProps> = ({
         closureReason: `currently cafe is closed. so I'm sorry boss ! . it will open at ${formatted}`
       };
 
-      await onUpdateCafeStatus(newStatus);
+      // Close modal immediately and apply status update with zero delay
       onClose();
+      await onUpdateCafeStatus(newStatus);
     } finally {
       setIsSubmitting(false);
     }
@@ -145,8 +146,9 @@ export const CafeStatusModal: React.FC<CafeStatusModalProps> = ({
         formattedReopenTime: '',
         closedBy: 'The Admin ( Rohit )'
       };
-      await onUpdateCafeStatus(newStatus);
+      // Close modal immediately and apply status update with zero delay
       onClose();
+      await onUpdateCafeStatus(newStatus);
     } finally {
       setIsSubmitting(false);
     }
@@ -155,14 +157,14 @@ export const CafeStatusModal: React.FC<CafeStatusModalProps> = ({
   const minDate = new Date().toISOString().split('T')[0];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-150">
       <div 
-        className={`w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden ${
+        className={`w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl border shadow-2xl ${
           isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
         {/* Header */}
-        <div className={`px-5 py-4 border-b flex items-center justify-between ${
+        <div className={`px-4 sm:px-5 py-3 sm:py-4 border-b flex items-center justify-between ${
           cafeStatus.isOpen 
             ? (isDarkMode ? 'bg-slate-950/70 border-slate-800' : 'bg-slate-50 border-slate-200')
             : 'bg-rose-950/30 border-rose-900/40 text-rose-300'

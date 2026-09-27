@@ -19,7 +19,8 @@ import {
   Sparkles,
   Lock,
   Clock,
-  Timer
+  Timer,
+  Trash2
 } from 'lucide-react';
 import { Product, CafeStatus, Order } from '../types';
 
@@ -27,6 +28,8 @@ interface InventoryViewProps {
   products: Product[];
   orders?: Order[];
   onUpdateStock: (productId: string, newStock: number) => void;
+  onSetAllStock?: (targetStock: number) => void;
+  onDeleteProduct?: (productId: string) => void;
   onOpenEditModal: (product: Product | null) => void;
   onSyncAllStock: () => Promise<void>;
   isSyncingStock: boolean;
@@ -43,6 +46,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   products,
   orders = [],
   onUpdateStock,
+  onSetAllStock,
+  onDeleteProduct,
   onOpenEditModal,
   onSyncAllStock,
   isSyncingStock,
@@ -148,7 +153,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Header: Metric & Search / Add Product Bar */}
-      <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
         {/* Metric on left */}
         <div className="flex items-center gap-3.5 shrink-0">
           <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
@@ -156,32 +161,54 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold text-white font-mono leading-none">{products.length}</span>
-              <span className="text-xs text-slate-300 font-medium">Total Catalog Dishes</span>
+              <span className="text-xl sm:text-2xl font-bold text-white font-mono leading-none">{products.length}</span>
+              <span className="text-xs text-slate-300 font-medium">Catalog Dishes</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">Across {categories.length} distinct categories</p>
           </div>
         </div>
 
         {/* Search input & Add Product button shifted to upper container */}
-        <div className="flex flex-1 items-center gap-2.5 max-w-2xl w-full">
-          <div className="relative flex-1">
+        <div className="flex flex-1 items-center flex-wrap gap-2 sm:gap-2.5 max-w-3xl w-full justify-start md:justify-end">
+          <div className="relative flex-1 min-w-[170px] w-full sm:w-auto">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search products by title or SKU code..."
+              placeholder="Search dishes or SKU..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full bg-slate-950 border border-slate-700/80 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
             />
           </div>
 
+          {onSetAllStock && (
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+              <button
+                type="button"
+                onClick={() => onSetAllStock(0)}
+                className="flex items-center gap-1 px-2.5 sm:px-3 py-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-[11px] sm:text-xs font-bold transition cursor-pointer active:scale-95 shadow-xs"
+                title="Owner Set All to 0: Marks all dishes as Sold Out on customer dashboard till you restock or cafe is reopened"
+              >
+                <span>Set All 0</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetAllStock(25)}
+                className="flex items-center gap-1 px-2.5 sm:px-3 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 text-[11px] sm:text-xs font-bold transition cursor-pointer active:scale-95 shadow-xs"
+                title="Reset all dishes to default 25 count (Available on customer dashboard)"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reset All to 25</span>
+              </button>
+            </div>
+          )}
+
           <button
             onClick={() => onOpenEditModal(null)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow transition cursor-pointer shrink-0"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow transition cursor-pointer shrink-0"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add Product</span>
+            <span>Add Dish</span>
           </button>
         </div>
       </div>
@@ -211,8 +238,211 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         </div>
       )}
 
-      {/* Inventory Table */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900 overflow-hidden shadow-sm">
+      {/* Mobile Inventory Cards View (Visible only on phone/mobile screens < md) */}
+      <div className="md:hidden space-y-3">
+        {filteredProducts.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center text-slate-400">
+            <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <p className="font-semibold text-slate-300">No dishes match filter</p>
+          </div>
+        ) : (
+          filteredProducts.map((prod, idx) => {
+            const isLow = prod.stock <= prod.lowStockThreshold && prod.stock > 0;
+            const isOut = prod.stock === 0;
+
+            return (
+              <div 
+                key={prod.id ? `mobile-${prod.id}-${idx}` : `mobile-prod-${idx}`} 
+                className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3 shadow-xs"
+              >
+                {/* Header: Photo + Title + Category */}
+                <div className="flex items-start gap-3">
+                  {prod.imageUrl ? (
+                    <img
+                      src={prod.imageUrl}
+                      alt={prod.name}
+                      className="w-16 h-16 object-cover rounded-xl border border-slate-700/80 shadow-md shrink-0 bg-slate-950"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
+                      <Boxes className="w-7 h-7 text-slate-500" />
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    {editingNameId === prod.id ? (
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="text"
+                          value={tempName}
+                          onChange={(e) => setTempName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveQuickName(prod.id);
+                            if (e.key === 'Escape') setEditingNameId(null);
+                          }}
+                          autoFocus
+                          className="px-2 py-1 bg-slate-950 border-2 border-indigo-500 rounded-lg text-xs text-white font-bold w-full"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSaveQuickName(prod.id)}
+                          className="p-1.5 rounded-lg bg-emerald-600 text-white cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingNameId(null)}
+                          className="p-1.5 rounded-lg bg-slate-800 text-slate-400 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div 
+                        onClick={() => {
+                          setEditingNameId(prod.id);
+                          setTempName(prod.name);
+                        }}
+                        className="flex items-center gap-1.5 cursor-pointer group"
+                      >
+                        <h4 className="font-bold text-white text-sm capitalize truncate">{prod.name}</h4>
+                        <Edit className="w-3 h-3 text-slate-500 group-hover:text-indigo-400 shrink-0" />
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-[10px] text-slate-400 font-medium px-2 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/60">
+                        {prod.category}
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                        isOut 
+                          ? 'bg-rose-500/10 text-rose-300 border-rose-500/30' 
+                          : isLow 
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' 
+                          : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                      }`}>
+                        {isOut ? 'Sold Out' : isLow ? 'Low Stock' : 'In Stock'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stock Controls & Price */}
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                  {/* Stepper */}
+                  <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleStepStock(prod.id, prod.stock, -1)}
+                      disabled={prod.stock <= 0}
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 bg-slate-900 active:bg-rose-600 disabled:opacity-20 text-base font-black cursor-pointer"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min="0"
+                      value={getDisplayStock(prod)}
+                      onChange={(e) => handleStockChange(prod.id, e.target.value)}
+                      onBlur={() => handleStockCommit(prod.id)}
+                      className={`w-12 bg-transparent text-center font-mono font-bold text-sm focus:outline-none ${
+                        isOut ? 'text-rose-400' : isLow ? 'text-amber-300' : 'text-emerald-300'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleStepStock(prod.id, prod.stock, 1)}
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 bg-slate-900 active:bg-emerald-600 text-base font-black cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {/* Set 0 / Restock 25 */}
+                  {prod.stock > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => onUpdateStock(prod.id, 0)}
+                      className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 text-rose-300 border border-rose-500/40 text-[11px] font-bold active:scale-95"
+                    >
+                      Set 0
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onUpdateStock(prod.id, 25)}
+                      className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 text-[11px] font-bold active:scale-95"
+                    >
+                      +25 Restock
+                    </button>
+                  )}
+
+                  {/* Price */}
+                  {editingPriceId === prod.id ? (
+                    <div className="flex items-center gap-1">
+                      <div className="flex items-center bg-slate-950 border border-emerald-500 rounded-lg px-2 py-0.5">
+                        <span className="text-emerald-400 text-xs font-mono font-bold">₹</span>
+                        <input
+                          type="number"
+                          value={tempPrice}
+                          onChange={(e) => setTempPrice(e.target.value)}
+                          className="w-14 bg-transparent text-white font-mono text-xs font-bold focus:outline-none"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveQuickPrice(prod.id);
+                            if (e.key === 'Escape') setEditingPriceId(null);
+                          }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => handleSaveQuickPrice(prod.id)}
+                        className="p-1 rounded-lg bg-emerald-600 text-white"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div 
+                      onClick={() => handleStartEditPrice(prod)}
+                      className="px-2.5 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-mono font-bold text-xs cursor-pointer active:scale-95"
+                      title="Tap to change price"
+                    >
+                      ₹{prod.price.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+
+                {/* Bottom Actions: Edit Dish / Delete */}
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                  <button
+                    type="button"
+                    onClick={() => onOpenEditModal(prod)}
+                    className="flex-1 py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                  >
+                    <Edit className="w-3.5 h-3.5" />
+                    <span>Edit Dish</span>
+                  </button>
+                  {onDeleteProduct && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteProduct(prod.id)}
+                      className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 transition cursor-pointer active:scale-90"
+                      title="Delete dish"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Desktop Inventory Table */}
+      <div className="hidden md:block rounded-xl border border-slate-800 bg-slate-900 overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-slate-950/80 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
@@ -240,18 +470,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   return (
                     <tr key={prod.id ? `${prod.id}-${prod.sku || idx}` : `prod-${idx}`} className="hover:bg-slate-800/40 transition">
                       {/* Product Name (Customer Site Live Sync) */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-3">
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-3.5">
                           {prod.imageUrl ? (
                             <img
                               src={prod.imageUrl}
                               alt={prod.name}
-                              className="w-10 h-10 object-cover rounded-lg border border-slate-700 shrink-0 bg-slate-900"
+                              className="w-16 h-16 object-cover rounded-xl border border-slate-700/80 shadow-md shrink-0 bg-slate-900 transition-transform hover:scale-105"
                               referrerPolicy="no-referrer"
                             />
                           ) : (
-                            <div className="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
-                              <Boxes className="w-5 h-5" />
+                            <div className="w-16 h-16 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 shrink-0 shadow-md">
+                              <Boxes className="w-8 h-8 text-slate-500" />
                             </div>
                           )}
                           <div className="flex-1 min-w-0">
@@ -270,29 +500,29 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                   }}
                                   autoFocus
                                   placeholder="Dish title..."
-                                  className="px-2 py-1 bg-slate-950 border border-indigo-500 rounded text-xs text-white font-bold focus:outline-none focus:ring-1 focus:ring-indigo-400 w-48"
+                                  className="px-2.5 py-1.5 bg-slate-950 border-2 border-indigo-500 rounded-lg text-sm text-white font-bold focus:outline-none focus:ring-1 focus:ring-indigo-400 w-56"
                                 />
                                 <button
                                   type="button"
                                   onClick={() => handleSaveQuickName(prod.id)}
-                                  className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-xs"
+                                  className="p-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-md transition"
                                   title="Save Dish Name (Instant Live Sync)"
                                 >
-                                  <Check className="w-3.5 h-3.5" />
+                                  <Check className="w-4 h-4" />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setEditingNameId(null)}
-                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer"
+                                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer transition"
                                   title="Cancel"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  <X className="w-4 h-4" />
                                 </button>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-2">
                                 <span 
-                                  className="font-bold text-white max-w-[280px] truncate capitalize hover:text-indigo-300 cursor-pointer flex items-center gap-1.5 group/dish text-sm"
+                                  className="font-black text-white text-base sm:text-lg max-w-[300px] truncate capitalize hover:text-indigo-300 cursor-pointer flex items-center gap-2 group/dish tracking-tight"
                                   title="Click to rename dish (Instant sync)"
                                   onClick={() => {
                                     setEditingNameId(prod.id);
@@ -300,12 +530,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                   }}
                                 >
                                   {prod.name}
-                                  <Edit className="w-3.5 h-3.5 text-slate-500 opacity-60 group-hover/dish:opacity-100 group-hover/dish:text-indigo-400 shrink-0 transition-opacity" />
+                                  <Edit className="w-4 h-4 text-slate-500 opacity-60 group-hover/dish:opacity-100 group-hover/dish:text-indigo-400 shrink-0 transition-opacity" />
                                 </span>
                               </div>
                             )}
                             {prod.description && (
-                              <div className="text-[10px] text-slate-400 max-w-[240px] truncate mt-0.5" title={prod.description}>
+                              <div className="text-xs text-slate-400 max-w-[280px] truncate mt-1 leading-snug font-medium" title={prod.description}>
                                 {prod.description}
                               </div>
                             )}
@@ -379,46 +609,57 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         </div>
                       </td>
 
-                      {/* Price & Margin (Pure Indian Rupees ₹) */}
-                      <td className="py-3.5 px-4">
+                      {/* Price & Margin (Pure Indian Rupees ₹) - Large and Eye-Catching */}
+                      <td className="py-4 px-4">
                         {editingPriceId === prod.id ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-emerald-400 font-bold font-mono text-sm">₹</span>
-                            <input
-                              type="number"
-                              step="1"
-                              value={tempPrice}
-                              onChange={(e) => setTempPrice(e.target.value)}
-                              className="w-20 bg-slate-950 border border-emerald-500 rounded px-2 py-1 text-white font-mono text-sm font-bold focus:outline-none focus:ring-1 focus:ring-emerald-400"
-                              autoFocus
-                              placeholder="Rupees"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveQuickPrice(prod.id);
-                                if (e.key === 'Escape') setEditingPriceId(null);
-                              }}
-                            />
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center bg-slate-950 border-2 border-emerald-500 rounded-xl px-2.5 py-1 shadow-md">
+                              <span className="text-emerald-400 font-black font-mono text-lg mr-1">₹</span>
+                              <input
+                                type="number"
+                                step="1"
+                                value={tempPrice}
+                                onChange={(e) => setTempPrice(e.target.value)}
+                                className="w-24 bg-transparent text-white font-mono text-xl font-black focus:outline-none"
+                                autoFocus
+                                placeholder="Price"
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSaveQuickPrice(prod.id);
+                                  if (e.key === 'Escape') setEditingPriceId(null);
+                                }}
+                              />
+                            </div>
                             <button
                               onClick={() => handleSaveQuickPrice(prod.id)}
-                              className="p-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-sm transition"
+                              className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-md transition active:scale-95"
                               title="Save Price in Rupees (₹)"
                             >
-                              <Check className="w-3.5 h-3.5" />
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setEditingPriceId(null)}
+                              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 cursor-pointer transition active:scale-95"
+                              title="Cancel"
+                            >
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
                         ) : (
-                          <div className="group/price flex items-center gap-2">
-                            <div>
-                              <div className="font-bold text-emerald-400 font-mono text-base flex items-center gap-0.5">
-                                <span>₹</span>
-                                <span>{prod.price}</span>
-                              </div>
+                          <div className="group/price flex items-center gap-2.5">
+                            <div 
+                              onClick={() => handleStartEditPrice(prod)}
+                              className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-emerald-500/15 border-2 border-emerald-500/40 text-emerald-300 font-mono font-black shadow-md hover:border-emerald-400 hover:bg-emerald-500/25 transition cursor-pointer active:scale-95"
+                              title="Click to edit price (₹)"
+                            >
+                              <span className="text-emerald-400 font-bold text-base">₹</span>
+                              <span className="text-2xl font-black tracking-tight text-emerald-200">{prod.price}</span>
                             </div>
                             <button
                               onClick={() => handleStartEditPrice(prod)}
-                              className="opacity-0 group-hover/price:opacity-100 p-1 text-slate-400 hover:text-emerald-300 transition cursor-pointer"
+                              className="opacity-0 group-hover/price:opacity-100 p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-emerald-300 transition cursor-pointer shadow-xs"
                               title="Quick Edit Price (₹)"
                             >
-                              <Edit className="w-3 h-3" />
+                              <Edit className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         )}
@@ -430,14 +671,30 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
-                        <button
-                          onClick={() => onOpenEditModal(prod)}
-                          className="flex items-center gap-1.5 ml-auto px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-300 transition text-xs font-semibold cursor-pointer"
-                          title="Edit Dish, Price, Photo & Thresholds"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
-                          <span>Edit Dish</span>
-                        </button>
+                        <div className="flex items-center gap-1.5 justify-end">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onDeleteProduct) {
+                                onDeleteProduct(prod.id);
+                              }
+                            }}
+                            className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 hover:border-rose-600 transition-all text-xs font-semibold cursor-pointer active:scale-90 shadow-xs flex items-center justify-center gap-1 group/del"
+                            title={`Permanently delete "${prod.name}" from database & customer dashboard`}
+                          >
+                            <Trash2 className="w-4 h-4 group-hover/del:scale-110 transition-transform" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenEditModal(prod)}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-300 transition text-xs font-semibold cursor-pointer shadow-xs active:scale-95"
+                            title="Edit Dish, Price, Photo & Thresholds"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                            <span>Edit Dish</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

@@ -26,6 +26,7 @@ import {
   BadgeAlert
 } from 'lucide-react';
 import { Product, CafeStatus, Order, PaymentMethodType, ParcelType } from '../types';
+import { listenToCatalogDishes, listenToCafeStatus } from '../services/firebase';
 
 interface CustomerDashboardViewProps {
   products: Product[];
@@ -35,6 +36,7 @@ interface CustomerDashboardViewProps {
   onOpenAdminCafeModal?: () => void;
   onReopenCafeEarly?: () => Promise<void>;
   onUpdateCafeStatus?: (status: CafeStatus) => Promise<void>;
+  onUpdateStock?: (productId: string, newStock: number) => void;
 }
 
 interface CartItem {
@@ -49,14 +51,193 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   onPlaceOrder,
   onOpenAdminCafeModal,
   onReopenCafeEarly,
-  onUpdateCafeStatus
+  onUpdateCafeStatus,
+  onUpdateStock
 }) => {
+  // Helper to strictly filter out any permanently deleted dish
+  const filterDeleted = (list: Product[]) => {
+    const deletedRegistry = new Set<string>();
+    try {
+      const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => deletedRegistry.add(String(id).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
+    return list.filter(p => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+      return !deletedRegistry.has(pId) && !deletedRegistry.has(pDishId) && !deletedRegistry.has(pSku) && !deletedRegistry.has(pName);
+    });
+  };
+
+  const [liveProducts, setLiveProducts] = useState<Product[]>(() => {
+    const ownerZeroSet = new Set<string>();
+    try {
+      const rawZero = localStorage.getItem("barozza_owner_zero_dishes");
+      if (rawZero) {
+        const parsedZero = JSON.parse(rawZero);
+        if (Array.isArray(parsedZero)) {
+          parsedZero.forEach(z => ownerZeroSet.add(String(z).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
+    const isCafeOpen = cafeStatus.isOpen;
+
+    return filterDeleted(products).map(p => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+
+      const isOwnerZero = 
+        ownerZeroSet.has(pId) || 
+        ownerZeroSet.has(pDishId) || 
+        ownerZeroSet.has(pSku) || 
+        ownerZeroSet.has(pName);
+
+      let finalStock = p.stock;
+      if (isCafeOpen) {
+        if (isOwnerZero) {
+          finalStock = 0;
+        } else if (finalStock === undefined || finalStock === null || finalStock === 0) {
+          finalStock = 25;
+        }
+      }
+
+      return {
+        ...p,
+        stock: finalStock,
+        available: finalStock !== undefined ? finalStock > 0 : true
+      };
+    });
+  });
+  const [liveCafeStatus, setLiveCafeStatus] = useState<CafeStatus>(cafeStatus);
+
+  useEffect(() => {
+    setLiveProducts(filterDeleted(products));
+  }, [products]);
+
+  useEffect(() => {
+    setLiveCafeStatus(cafeStatus);
+  }, [cafeStatus]);
+
+  useEffect(() => {
+    const unsubCatalog = listenToCatalogDishes((dishes) => {
+      if (dishes && dishes.length > 0) {
+        setLiveProducts(filterDeleted(dishes));
+      }
+    });
+    const unsubStatus = listenToCafeStatus((status) => {
+      setLiveCafeStatus(status);
+      if (status.isOpen) {
+        // Cafe opened! By default dishes count 25 already
+        setLiveProducts(prev => prev.map(p => ({
+          ...p,
+          stock: 25,
+          status: 'in_stock' as const,
+          available: true,
+          cafeClosed: false
+        })));
+      }
+    });
+
+    // Listen for live stock update events (instant local propagation)
+    const handleStockUpdated = (e: any) => {
+      if (e.detail?.products) {
+        setLiveProducts(filterDeleted(e.detail.products));
+      } else if (e.detail?.productId && e.detail?.newStock !== undefined) {
+        setLiveProducts(prev => prev.map(p => 
+          (p.id === e.detail.productId || p.dishId === e.detail.productId || p.sku === e.detail.productId)
+            ? { ...p, stock: e.detail.newStock, available: e.detail.newStock > 0 }
+            : p
+        ));
+      }
+    };
+    window.addEventListener('barozza_stock_updated', handleStockUpdated);
+
+    // Listen for cafe status change events
+    const handleCafeStatusChange = (e: any) => {
+      if (e.detail) {
+        setLiveCafeStatus(e.detail);
+        if (e.detail.isOpen) {
+          setLiveProducts(prev => prev.map(p => ({
+            ...p,
+            stock: 25,
+            status: 'in_stock' as const,
+            available: true,
+            cafeClosed: false
+          })));
+        }
+      }
+    };
+    window.addEventListener('barozza_cafe_status_change', handleCafeStatusChange);
+
+    // Listen for dish deletion events
+    const handleDishDeleted = (e: any) => {
+      setLiveProducts(prev => filterDeleted(prev));
+      const delId = e?.detail?.productId;
+      if (delId) {
+        setCart(prev => prev.filter(c => c.product.id !== delId && c.product.dishId !== delId && c.product.sku !== delId));
+      }
+    };
+    window.addEventListener('barozza_dish_deleted', handleDishDeleted);
+
+    // BroadcastChannel listeners for cross-tab realtime sync
+    let bcDishes: BroadcastChannel | null = null;
+    let bcStatus: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        bcDishes = new BroadcastChannel('barozza_cafe_dishes');
+        bcDishes.onmessage = (event) => {
+          if (event.data?.dishes) {
+            setLiveProducts(filterDeleted(event.data.dishes));
+          }
+        };
+        bcStatus = new BroadcastChannel('barozza_cafe_status');
+        bcStatus.onmessage = (event) => {
+          if (event.data?.status) {
+            setLiveCafeStatus(event.data.status);
+            if (event.data.status.isOpen) {
+              setLiveProducts(prev => prev.map(p => ({
+                ...p,
+                stock: 25,
+                status: 'in_stock' as const,
+                available: true,
+                cafeClosed: false
+              })));
+            }
+          }
+        };
+      } catch (e) {}
+    }
+
+    return () => {
+      unsubCatalog();
+      unsubStatus();
+      window.removeEventListener('barozza_stock_updated', handleStockUpdated);
+      window.removeEventListener('barozza_cafe_status_change', handleCafeStatusChange);
+      window.removeEventListener('barozza_dish_deleted', handleDishDeleted);
+      if (bcDishes) bcDishes.close();
+      if (bcStatus) bcStatus.close();
+    };
+  }, []);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [closedAlertOpen, setClosedAlertOpen] = useState(false);
   const [lastAttemptedDish, setLastAttemptedDish] = useState<string>('');
+  const [soldOutAlertOpen, setSoldOutAlertOpen] = useState(false);
+  const [activeSoldOutDish, setActiveSoldOutDish] = useState<Product | null>(null);
+  const [stockNoticeToast, setStockNoticeToast] = useState<string | null>(null);
 
   // Checkout form fields
   const [customerName, setCustomerName] = useState('Aman Deep');
@@ -70,13 +251,13 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   const [countdown, setCountdown] = useState<string>('');
 
   useEffect(() => {
-    if (cafeStatus.isOpen || !cafeStatus.reopenTime) {
+    if (liveCafeStatus.isOpen || !liveCafeStatus.reopenTime) {
       setCountdown('');
       return;
     }
 
     const calcCountdown = () => {
-      const target = new Date(cafeStatus.reopenTime).getTime();
+      const target = new Date(liveCafeStatus.reopenTime).getTime();
       const diff = target - Date.now();
       if (diff <= 0) {
         setCountdown('Opening momentarily...');
@@ -91,34 +272,35 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     calcCountdown();
     const interval = setInterval(calcCountdown, 1000);
     return () => clearInterval(interval);
-  }, [cafeStatus]);
+  }, [liveCafeStatus]);
 
   // Categories list
   const categories = useMemo(() => {
-    const list = Array.from(new Set(products.map(p => p.category || 'General')));
+    const list = Array.from(new Set(liveProducts.map(p => p.category || 'General')));
     return ['All', ...list];
-  }, [products]);
+  }, [liveProducts]);
 
   // Filtered products
   const filteredProducts = useMemo(() => {
-    return products.filter(p => {
+    return liveProducts.filter(p => {
       const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           p.sku.toLowerCase().includes(searchTerm.toLowerCase());
       const matchCat = selectedCategory === 'All' || p.category === selectedCategory;
       return matchSearch && matchCat;
     });
-  }, [products, searchTerm, selectedCategory]);
+  }, [liveProducts, searchTerm, selectedCategory]);
 
   // Handler for customer clicking on any dish / order button
   const handleDishClick = (dish: Product) => {
-    if (!cafeStatus.isOpen) {
+    if (!liveCafeStatus.isOpen) {
       setLastAttemptedDish(dish.name);
       setClosedAlertOpen(true);
       return;
     }
 
     if (dish.stock === 0 || dish.status === 'out_of_stock') {
-      alert(`Sorry! ${dish.name} is currently out of stock (0 quantity available).`);
+      setActiveSoldOutDish(dish);
+      setSoldOutAlertOpen(true);
       return;
     }
 
@@ -127,7 +309,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       const exists = prev.find(item => item.product.id === dish.id);
       if (exists) {
         if (dish.stock !== undefined && exists.quantity >= dish.stock) {
-          alert(`Only ${dish.stock} units of ${dish.name} available in kitchen.`);
+          setStockNoticeToast(`Only ${dish.stock} units of ${dish.name} available in kitchen.`);
+          setTimeout(() => setStockNoticeToast(null), 3000);
           return prev;
         }
         return prev.map(item => item.product.id === dish.id ? { ...item, quantity: item.quantity + 1 } : item);
@@ -138,7 +321,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   };
 
   const handleUpdateCartQty = (productId: string, delta: number) => {
-    if (!cafeStatus.isOpen) {
+    if (!liveCafeStatus.isOpen) {
       setClosedAlertOpen(true);
       return;
     }
@@ -160,7 +343,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cafeStatus.isOpen) {
+    if (!liveCafeStatus.isOpen) {
       setClosedAlertOpen(true);
       return;
     }
@@ -226,22 +409,22 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       closureReason: `currently cafe is closed. so I'm sorry boss ! . it will open at ${formatted}`
     };
     if (onUpdateCafeStatus) {
-      await onUpdateCafeStatus(newStatus);
+      onUpdateCafeStatus(newStatus);
     } else if (onOpenAdminCafeModal) {
       onOpenAdminCafeModal();
     }
   };
 
   return (
-    <div className={`space-y-6 transition-all duration-300 ${!cafeStatus.isOpen ? 'grayscale contrast-125 bg-black text-white p-3 sm:p-5 rounded-3xl border-2 border-neutral-700 shadow-2xl' : ''}`}>
+    <div className={`space-y-6 transition-all duration-300 ${!liveCafeStatus.isOpen ? 'grayscale contrast-125 bg-black text-white p-3 sm:p-5 rounded-3xl border-2 border-neutral-700 shadow-2xl' : ''}`}>
       {/* Sticky Quick Alert Bar when Cafe is Closed */}
-      {!cafeStatus.isOpen && (
+      {!liveCafeStatus.isOpen && (
         <div className="sticky top-16 z-30 py-3 px-4 sm:px-6 bg-black border-2 border-neutral-700 text-white rounded-2xl shadow-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
             <Lock className="w-4 h-4 text-rose-400 shrink-0" />
             <span className="font-bold text-neutral-100">
-              "currently cafe is closed. so I'm sorry boss ! . it will open at <strong className="text-amber-300 font-mono underline">{cafeStatus.formattedReopenTime || 'Date and Time'}</strong>."
+              "currently cafe is closed. so I'm sorry boss ! . it will open at <strong className="text-amber-300 font-mono underline">{liveCafeStatus.formattedReopenTime || 'Date and Time'}</strong>."
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -269,7 +452,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       )}
 
       {/* Interactive Black & White Cafe Closed Hero Alert Banner */}
-      {!cafeStatus.isOpen ? (
+      {!liveCafeStatus.isOpen ? (
         <div className="relative overflow-hidden rounded-2xl bg-black border-2 border-neutral-700 p-5 sm:p-6 text-white shadow-2xl animate-in fade-in duration-200">
           <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-start gap-3.5">
@@ -292,13 +475,13 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 
                 {/* Requested prompt quote alert box */}
                 <div className="p-3.5 rounded-xl bg-neutral-900/90 border border-neutral-700 text-sm font-bold text-neutral-100 max-w-2xl leading-relaxed">
-                  "currently cafe is closed. so I'm sorry boss ! . it will open at <span className="text-amber-300 font-extrabold underline">{cafeStatus.formattedReopenTime || 'Date and Time'}</span>."
+                  "currently cafe is closed. so I'm sorry boss ! . it will open at <span className="text-amber-300 font-extrabold underline">{liveCafeStatus.formattedReopenTime || 'Date and Time'}</span>."
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
                   <div className="flex items-center gap-1.5 text-neutral-200 bg-neutral-900 px-3 py-1.5 rounded-lg border border-neutral-700">
                     <Clock className="w-4 h-4 text-neutral-400" />
-                    <span>Reopening: <strong className="text-white font-mono">{cafeStatus.formattedReopenTime || 'Scheduled Time'}</strong></span>
+                    <span>Reopening: <strong className="text-white font-mono">{liveCafeStatus.formattedReopenTime || 'Scheduled Time'}</strong></span>
                   </div>
                   {countdown && (
                     <div className="flex items-center gap-1.5 text-neutral-200 bg-neutral-900 px-3 py-1.5 rounded-lg border border-neutral-700">
@@ -417,7 +600,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
       {/* Search & Category Filter Bar */}
       <div className={`p-3.5 rounded-xl border flex flex-col sm:flex-row items-center justify-between gap-3 ${
-        !cafeStatus.isOpen 
+        !liveCafeStatus.isOpen 
           ? 'bg-neutral-900 border-neutral-800 text-neutral-300' 
           : (isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900 shadow-xs')
       }`}>
@@ -429,7 +612,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className={`w-full pl-9 pr-4 py-1.5 rounded-lg text-xs border outline-hidden transition ${
-              !cafeStatus.isOpen
+              !liveCafeStatus.isOpen
                 ? 'bg-black border-neutral-700 text-white placeholder-neutral-500'
                 : (isDarkMode ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500 focus:border-indigo-500' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400 focus:border-indigo-600')
             }`}
@@ -444,8 +627,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               onClick={() => setSelectedCategory(cat)}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition cursor-pointer ${
                 selectedCategory === cat
-                  ? (!cafeStatus.isOpen ? 'bg-white text-black' : 'bg-indigo-600 text-white')
-                  : (!cafeStatus.isOpen ? 'bg-neutral-800 text-neutral-400 hover:text-white' : (isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900'))
+                  ? (!liveCafeStatus.isOpen ? 'bg-white text-black' : 'bg-indigo-600 text-white')
+                  : (!liveCafeStatus.isOpen ? 'bg-neutral-800 text-neutral-400 hover:text-white' : (isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900'))
               }`}
             >
               {cat}
@@ -456,7 +639,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
       {/* Dish Catalog Grid - STYLED BLACK & WHITE WHEN CAFE IS CLOSED */}
       <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 ${
-        !cafeStatus.isOpen ? 'grayscale contrast-125' : ''
+        !liveCafeStatus.isOpen ? 'grayscale contrast-125' : ''
       }`}>
         {filteredProducts.map((dish, idx) => {
           const inCart = cart.find(i => i.product.id === dish.id);
@@ -466,7 +649,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               key={dish.id ? `${dish.id}-${dish.sku || idx}` : `dish-${idx}`}
               onClick={() => handleDishClick(dish)}
               className={`group rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col justify-between cursor-pointer hover:shadow-xl ${
-                !cafeStatus.isOpen
+                !liveCafeStatus.isOpen
                   ? 'bg-neutral-900 border-neutral-700 text-white hover:border-neutral-500'
                   : isOutOfStock
                   ? 'bg-slate-900/60 border-rose-900/40 text-slate-300 opacity-80'
@@ -489,7 +672,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   
                   {/* Category badge */}
                   <span className={`absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${
-                    !cafeStatus.isOpen
+                    !liveCafeStatus.isOpen
                       ? 'bg-black/80 text-white border border-neutral-600'
                       : 'bg-indigo-900/80 text-indigo-200 border border-indigo-500/40'
                   }`}>
@@ -497,7 +680,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   </span>
 
                   {/* SOLD OUT / Out of stock overlay badge */}
-                  {!cafeStatus.isOpen ? (
+                  {!liveCafeStatus.isOpen ? (
                     <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
                       <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500">
                         SOLD OUT
@@ -505,8 +688,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     </div>
                   ) : isOutOfStock ? (
                     <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
-                      <span className="px-3 py-1 rounded bg-rose-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-rose-500">
-                        OUT OF STOCK
+                      <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500 animate-pulse">
+                        SOLD OUT
                       </span>
                     </div>
                   ) : dish.stock !== undefined && dish.stock <= 5 ? (
@@ -522,7 +705,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
                   {/* Quick price tag */}
                   <span className={`absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-xl text-xs font-black font-mono shadow-md ${
-                    !cafeStatus.isOpen
+                    !liveCafeStatus.isOpen
                       ? 'bg-black text-red-500 border border-neutral-700'
                       : 'bg-slate-900/90 text-emerald-400 border border-slate-700'
                   }`}>
@@ -536,7 +719,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     <h3 className="text-sm font-bold tracking-tight line-clamp-1 group-hover:text-indigo-400 transition-colors">
                       {dish.name}
                     </h3>
-                    <span className={`text-xs font-black font-mono ${!cafeStatus.isOpen ? 'text-red-500' : 'text-emerald-400'}`}>
+                    <span className={`text-xs font-black font-mono ${!liveCafeStatus.isOpen ? 'text-red-500' : 'text-emerald-400'}`}>
                       ₹{dish.price.toFixed(2)}
                     </span>
                   </div>
@@ -561,9 +744,9 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     )}
                   </div>
 
-                  <p className={`text-xs line-clamp-2 leading-relaxed ${!cafeStatus.isOpen ? 'text-neutral-400' : (isDarkMode ? 'text-slate-400' : 'text-slate-500')}`}>
-                    {!cafeStatus.isOpen
-                      ? (cafeStatus.closureReason || `currently cafe is closed. so I'm sorry boss ! . it will open at ${cafeStatus.formattedReopenTime || 'soon'}.`)
+                  <p className={`text-xs line-clamp-2 leading-relaxed ${!liveCafeStatus.isOpen ? 'text-neutral-400' : (isDarkMode ? 'text-slate-400' : 'text-slate-500')}`}>
+                    {!liveCafeStatus.isOpen
+                      ? (liveCafeStatus.closureReason || `currently cafe is closed. so I'm sorry boss ! . it will open at ${liveCafeStatus.formattedReopenTime || 'soon'}.`)
                       : (dish.description || `${dish.name} freshly prepared with signature recipes.`)}
                   </p>
                 </div>
@@ -571,12 +754,12 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
               {/* Action Button */}
               <div className={`p-4 pt-0 flex items-center justify-between gap-2 border-t mt-3 pt-3 ${
-                !cafeStatus.isOpen ? 'border-neutral-800' : (isDarkMode ? 'border-slate-800/80' : 'border-slate-100')
+                !liveCafeStatus.isOpen ? 'border-neutral-800' : (isDarkMode ? 'border-slate-800/80' : 'border-slate-100')
               }`}>
                 <span className="text-[11px] font-semibold text-neutral-400 flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                   5-10 MIN
-                  {cafeStatus.isOpen && (
+                  {liveCafeStatus.isOpen && (
                     <span className="ml-1 text-[10px] font-extrabold text-neutral-400 uppercase hidden sm:inline">
                       • FREE DELIVERY
                     </span>
@@ -590,17 +773,17 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     handleDishClick(dish);
                   }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    !cafeStatus.isOpen
+                    !liveCafeStatus.isOpen
                       ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border border-neutral-700 uppercase font-extrabold text-[10px]'
                       : isOutOfStock
                       ? 'bg-rose-950/60 border border-rose-800 text-rose-300 hover:bg-rose-900/60 font-bold'
                       : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
                   }`}
                 >
-                  {!cafeStatus.isOpen ? (
+                  {!liveCafeStatus.isOpen ? (
                     <span>UNAVAILABLE</span>
                   ) : isOutOfStock ? (
-                    <span>OUT OF STOCK</span>
+                    <span>SOLD OUT</span>
                   ) : inCart ? (
                     <>
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
@@ -651,7 +834,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             {/* Exact Requested Prompt Alert Message */}
             <div className="p-4 rounded-xl bg-neutral-900/90 border border-neutral-700 space-y-3">
               <div className="text-sm font-bold text-neutral-100 leading-relaxed font-sans">
-                "currently cafe is closed. so I'm sorry boss ! . it will open at <span className="text-amber-300 font-extrabold underline">{cafeStatus.formattedReopenTime || 'Date and Time'}</span>."
+                "currently cafe is closed. so I'm sorry boss ! . it will open at <span className="text-amber-300 font-extrabold underline">{liveCafeStatus.formattedReopenTime || 'Date and Time'}</span>."
               </div>
               {lastAttemptedDish && (
                 <p className="text-xs text-neutral-400 pt-1 border-t border-neutral-800">
@@ -664,7 +847,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900 border border-neutral-800">
                 <span className="text-neutral-400">Scheduled Reopening:</span>
-                <span className="font-bold font-mono text-white">{cafeStatus.formattedReopenTime}</span>
+                <span className="font-bold font-mono text-white">{liveCafeStatus.formattedReopenTime}</span>
               </div>
               {countdown && (
                 <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900 border border-neutral-800">
@@ -711,6 +894,107 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         </div>
       )}
 
+      {/* ========================================================================= */}
+      {/* INTERACTIVE SOLD OUT ALERT MODAL: "Sorry boss! [Dish] is currently sold out" */}
+      {/* ========================================================================= */}
+      {soldOutAlertOpen && activeSoldOutDish && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl bg-neutral-950 border-2 border-rose-800/80 text-white p-6 shadow-2xl space-y-5 relative">
+            {/* Close Button */}
+            <button
+              onClick={() => {
+                setSoldOutAlertOpen(false);
+                setActiveSoldOutDish(null);
+              }}
+              className="absolute top-4 right-4 p-1.5 rounded-lg bg-neutral-900 text-neutral-400 hover:text-white hover:bg-neutral-800 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Icon Header */}
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-rose-950/80 border border-rose-700/60 flex items-center justify-center text-rose-400 shadow-inner">
+                <AlertCircle className="w-6 h-6 text-rose-400" />
+              </div>
+              <div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-rose-950 text-rose-400 border border-rose-800">
+                  Item Sold Out
+                </span>
+                <h3 className="text-lg font-black tracking-tight text-white mt-0.5">
+                  Parcel Sold Out
+                </h3>
+              </div>
+            </div>
+
+            {/* Exact Required Prompt Message */}
+            <div className="p-4 rounded-xl bg-neutral-900/90 border border-rose-900/40 space-y-2">
+              <div className="text-sm font-bold text-neutral-100 leading-relaxed font-sans">
+                "Sorry boss! <span className="text-rose-400 font-extrabold underline">{activeSoldOutDish.name}</span> is currently sold out / out of stock. It will be restocked soon by Rohit's Kitchen."
+              </div>
+              <p className="text-xs text-neutral-400 pt-1 border-t border-neutral-800">
+                Fresh ingredients are being prepared. You can explore other dishes from the menu below or quick restock as admin.
+              </p>
+            </div>
+
+            {/* Dish Mini Preview Card */}
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800">
+              <img
+                src={activeSoldOutDish.imageUrl || '/images/frenchh.png'}
+                alt={activeSoldOutDish.name}
+                className="w-14 h-14 rounded-lg object-cover bg-neutral-950 border border-neutral-700 shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=300&q=80';
+                }}
+              />
+              <div className="flex-1 min-w-0">
+                <h4 className="text-xs font-bold text-white truncate">{activeSoldOutDish.name}</h4>
+                <p className="text-[11px] text-neutral-400 font-mono">₹{activeSoldOutDish.price.toFixed(2)} • {activeSoldOutDish.category}</p>
+                <span className="inline-block mt-1 text-[10px] font-bold text-rose-400 bg-rose-950/60 px-2 py-0.5 rounded border border-rose-900/50">
+                  Current Stock: 0 portions (Sold Out)
+                </span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-2 flex flex-col sm:flex-row gap-2">
+              <button
+                onClick={() => {
+                  setSoldOutAlertOpen(false);
+                  setActiveSoldOutDish(null);
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-bold transition shadow cursor-pointer"
+              >
+                Browse Other Dishes
+              </button>
+              <button
+                onClick={() => {
+                  if (activeSoldOutDish) {
+                    const newStock = 25;
+                    if (onUpdateStock) {
+                      onUpdateStock(activeSoldOutDish.id, newStock);
+                    }
+                    setLiveProducts(prev => prev.map(p => p.id === activeSoldOutDish.id ? { ...p, stock: newStock, status: 'in_stock' } : p));
+                    setSoldOutAlertOpen(false);
+                    setActiveSoldOutDish(null);
+                  }
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-emerald-400 text-xs font-bold border border-neutral-600 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>Admin: Quick Restock (+25)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock warning toast */}
+      {stockNoticeToast && (
+        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-xl bg-amber-950 border border-amber-600 text-amber-200 text-xs font-bold shadow-2xl animate-in slide-in-from-bottom duration-200 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{stockNoticeToast}</span>
+        </div>
+      )}
+
       {/* Cart & Checkout Drawer */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs animate-in fade-in">
@@ -738,14 +1022,14 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
             {/* Cart Items List */}
             <div className="p-4 flex-1 overflow-y-auto space-y-3">
-              {!cafeStatus.isOpen && (
+              {!liveCafeStatus.isOpen && (
                 <div className="p-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white space-y-1">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
                     <Lock className="w-3.5 h-3.5" />
                     <span>CAFE IS CLOSED</span>
                   </div>
                   <p className="text-xs text-neutral-300">
-                    Order checkout is disabled. Reopens at {cafeStatus.formattedReopenTime}.
+                    Order checkout is disabled. Reopens at {liveCafeStatus.formattedReopenTime}.
                   </p>
                 </div>
               )}
@@ -899,17 +1183,17 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 <button
                   type="button"
                   onClick={handleCheckout}
-                  disabled={isSubmittingOrder || !cafeStatus.isOpen}
+                  disabled={isSubmittingOrder || !liveCafeStatus.isOpen}
                   className={`w-full py-3 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
-                    !cafeStatus.isOpen
+                    !liveCafeStatus.isOpen
                       ? 'bg-neutral-800 text-neutral-400 border border-neutral-600'
                       : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-950/50'
                   }`}
                 >
-                  {!cafeStatus.isOpen ? (
+                  {!liveCafeStatus.isOpen ? (
                     <>
                       <Lock className="w-4 h-4" />
-                      <span>Cafe is Closed (Opens {cafeStatus.formattedReopenTime})</span>
+                      <span>Cafe is Closed (Opens {liveCafeStatus.formattedReopenTime})</span>
                     </>
                   ) : (
                     <>

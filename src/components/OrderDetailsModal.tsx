@@ -108,32 +108,32 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const isMultiple = Boolean(order.isMultipleOrders && (order.mergedOrderCount || 0) > 1);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-      <div className={`bg-white rounded-3xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col shadow-2xl text-slate-900 animate-in fade-in zoom-in-95 duration-200 ${
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-xs">
+      <div className={`bg-white rounded-3xl w-full max-w-3xl max-h-[94vh] overflow-hidden flex flex-col shadow-2xl text-slate-900 animate-in fade-in zoom-in-95 duration-200 ${
         isMultiple ? 'border-4 border-yellow-400 shadow-[0_0_35px_rgba(250,204,21,0.4)]' : 'border border-slate-200'
       }`}>
         {/* Top Header Banner matching reference design */}
-        <div className={`px-6 py-5 border-b border-slate-100 flex items-center justify-between ${
+        <div className={`px-4 sm:px-6 py-3.5 sm:py-5 border-b border-slate-100 flex items-center justify-between ${
           isMultiple ? 'bg-yellow-50/50' : 'bg-white'
         }`}>
-          <div className="flex items-center gap-4">
-            <div className={`w-12 h-12 rounded-2xl ${
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl ${
               isMultiple ? 'bg-yellow-100 border-2 border-yellow-400 text-yellow-700' : 'bg-emerald-50 border border-emerald-100 text-emerald-600'
             } flex items-center justify-center shrink-0 shadow-xs`}>
-              {isMultiple ? <Package className="w-6 h-6 text-yellow-600" /> : <CheckCircle2 className="w-6 h-6" />}
+              {isMultiple ? <Package className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-600" /> : <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />}
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold text-slate-900">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate">
                   {isMultiple ? `Consolidated Parcel (${order.mergedOrderCount} Orders Combined)` : 'Parcel Received'}
                 </h2>
                 {isMultiple && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-yellow-400 text-black font-mono uppercase tracking-wider">
-                    Yellow Border Active
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-yellow-400 text-black font-mono uppercase tracking-wider shrink-0">
+                    Combined
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">
                 {isMultiple 
                   ? `Showing 1 single parcel showing all products ordered by ${order.customer.name} across ${order.mergedOrderCount} orders.`
                   : 'The order has been successfully received.'}
@@ -423,19 +423,19 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-slate-100 bg-white flex items-center justify-between">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-100 bg-white flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-4">
           <button
             type="button"
             onClick={() => onCreateSupportTicket(order)}
-            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer"
+            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer order-last sm:order-first text-center sm:text-left"
           >
             Create Customer Support Ticket
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer text-center"
             >
               Close
             </button>
@@ -443,9 +443,9 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-200 transition disabled:opacity-50 cursor-pointer"
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-200 transition disabled:opacity-50 cursor-pointer text-center"
             >
-              <Save className="w-3.5 h-3.5" />
+              <Save className="w-3.5 h-3.5 shrink-0" />
               <span>{isSaving ? 'Syncing...' : savedSuccess ? 'Saved & Synced!' : 'Save & Sync Update'}</span>
             </button>
           </div>

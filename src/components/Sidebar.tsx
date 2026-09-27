@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Home, 
-  FileText, 
-  Menu as MenuIcon, 
+  Utensils, 
+  Menu as MenuIcon,
   ChevronLeft,
   ChevronRight,
   GripVertical
@@ -48,15 +48,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'customize-menu',
       tabKey: 'inventory' as const,
       label: 'Customize Menu',
-      icon: MenuIcon,
+      icon: Utensils,
       action: () => setActiveTab('inventory')
-    },
-    {
-      id: 'revenue',
-      tabKey: 'analytics' as const,
-      label: 'Revenue Reports',
-      icon: FileText,
-      action: () => setActiveTab('analytics')
     }
   ];
 
@@ -133,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside 
       style={{ width: `${currentDisplayWidth}px` }}
-      className={`shrink-0 select-none flex flex-col justify-between z-20 relative transition-[width] duration-150 ${
+      className={`hidden md:flex shrink-0 select-none flex-col justify-between z-20 relative transition-[width] duration-150 ${
         isDragging ? 'transition-none border-cyan-500' : ''
       } ${
         sidebarPosition === 'right' ? 'order-last border-l' : 'order-first border-r'

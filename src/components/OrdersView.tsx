@@ -609,103 +609,6 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* 4-Panel Dark Grey Grid matching image */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-        {/* Panel 1 (Top-Left): TODAY'S TOTAL ORDERS */}
-        <div className={`p-4 sm:p-5 rounded-2xl ${isDarkMode ? 'bg-[#161922] border-slate-800/80 shadow-md' : 'bg-slate-900 border-slate-800 text-white shadow-md'} border flex flex-col justify-between`}>
-          <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
-            TODAY'S TOTAL ORDERS
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div>
-              <div className="text-4xl sm:text-5xl font-extrabold text-white font-sans tracking-tight leading-none">
-                {todaysOrdersCount}
-              </div>
-              <div className="flex items-center gap-3 mt-2 text-[10px] sm:text-[11px] font-bold tracking-wider text-slate-400 uppercase">
-                <span>TOTAL</span>
-                <span>ORDERS</span>
-              </div>
-            </div>
-            <DeliveryBox3DIcon />
-          </div>
-        </div>
-
-        {/* Panel 2 (Top-Right): TODAY'S TOTAL REVENUE */}
-        <div className={`p-4 sm:p-5 rounded-2xl ${isDarkMode ? 'bg-[#161922] border-slate-800/80 shadow-md' : 'bg-slate-900 border-slate-800 text-white shadow-md'} border flex flex-col justify-between`}>
-          <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
-            TODAY'S TOTAL REVENUE
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div>
-              <div className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white font-sans tracking-tight leading-none">
-                ₹{todaysTotalRevenue.toFixed(2)}
-              </div>
-              <div className="flex items-center gap-3 mt-2 text-[10px] sm:text-[11px] font-bold tracking-wider text-slate-400 uppercase">
-                <span>TOTAL</span>
-                <span>REVENUE</span>
-              </div>
-            </div>
-            <CoinsRevenue3DIcon />
-          </div>
-        </div>
-
-        {/* Panel 3 (Bottom-Left): PAYMENT METHODS */}
-        <div className={`p-4 sm:p-5 rounded-2xl ${isDarkMode ? 'bg-[#161922] border-slate-800/80 shadow-md' : 'bg-slate-900 border-slate-800 text-white shadow-md'} border flex flex-col justify-between`}>
-          <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
-            PAYMENT METHODS
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div className="grid grid-cols-2 divide-x divide-slate-800/90 pt-1 flex-1">
-              {/* UPI Sub-section */}
-              <div className="pr-3">
-                <UpiBrandIcon />
-                <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
-                  {todaysUpiOrdersCount}
-                </div>
-              </div>
-              {/* COD Sub-section */}
-              <div className="pl-4 sm:pl-6">
-                <CodBrandIcon />
-                <div className="text-3xl sm:text-4xl font-extrabold text-white font-sans mt-2.5 leading-none">
-                  {todaysCodOrdersCount}
-                </div>
-              </div>
-            </div>
-            <DeliveryBox3DIcon />
-          </div>
-        </div>
-
-        {/* Panel 4 (Bottom-Right): REVENUE BREAKDOWN */}
-        <div className={`p-4 sm:p-5 rounded-2xl ${isDarkMode ? 'bg-[#161922] border-slate-800/80 shadow-md' : 'bg-slate-900 border-slate-800 text-white shadow-md'} border flex flex-col justify-between`}>
-          <div className="text-xs font-bold text-slate-300 tracking-wider uppercase">
-            REVENUE BREAKDOWN
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div className="grid grid-cols-2 divide-x divide-slate-800/90 pt-1 flex-1">
-              {/* UPI Amount Sub-section */}
-              <div className="pr-3">
-                <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
-                  UPI Received
-                </div>
-                <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
-                  ₹{todaysUpiTotalAmount.toFixed(2)}
-                </div>
-              </div>
-              {/* COD Pending Amount Sub-section */}
-              <div className="pl-4 sm:pl-6">
-                <div className="text-[11px] sm:text-xs font-bold text-slate-300 tracking-wider uppercase">
-                  COD Pending
-                </div>
-                <div className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white font-sans mt-2.5 tracking-tight leading-none">
-                  ₹{todaysCodPendingAmount.toFixed(2)}
-                </div>
-              </div>
-            </div>
-            <CoinsRevenue3DIcon />
-          </div>
-        </div>
-      </div>
-
       {/* Orders Management Anchor & Section */}
       <div id="orders-management-section" className="space-y-3 pt-2">
 
@@ -863,35 +766,49 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
                 {/* Customer & Delivery Address Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Customer Details */}
-                  <div className={`p-3.5 rounded-2xl ${isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-900'} border space-y-2.5`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-2xl ${isDarkMode ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-blue-50 text-blue-600'} flex items-center justify-center shrink-0`}>
+                {/* Customer Details */}
+                  <div className={`p-3 sm:p-3.5 rounded-2xl ${isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-900'} border space-y-2`}>
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-2xl ${isDarkMode ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-blue-50 text-blue-600'} flex items-center justify-center shrink-0`}>
                         <User className="w-4 h-4" />
                       </div>
-                      <div>
-                        <div className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase tracking-wider`}>Customer Details</div>
-                        <div className={`text-base sm:text-lg font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{ord.customer.name}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-[9px] sm:text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase tracking-wider`}>Customer Details</div>
+                        <div className={`text-sm sm:text-lg font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} truncate`}>{ord.customer.name}</div>
                       </div>
                     </div>
-                    <div className={`flex items-center gap-1.5 text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-600'} font-mono pl-1`}>
-                      <Phone className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{ord.customer.phone}</span>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-700/30">
+                      <a 
+                        href={`tel:${ord.customer.phone}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`flex items-center gap-1.5 text-xs sm:text-sm ${isDarkMode ? 'text-indigo-400 hover:text-indigo-300' : 'text-indigo-600 hover:text-indigo-700'} font-mono font-semibold transition`}
+                        title="Tap to call customer"
+                      >
+                        <Phone className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        <span className="truncate">{ord.customer.phone}</span>
+                      </a>
+                      <a 
+                        href={`tel:${ord.customer.phone}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="px-2 py-0.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white text-[10px] font-bold transition flex items-center gap-1 border border-indigo-500/30 shrink-0"
+                      >
+                        <span>Call</span>
+                      </a>
                     </div>
                   </div>
 
                   {/* Delivery Address */}
-                  <div className={`p-3.5 rounded-2xl ${isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-900'} border space-y-2.5`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-2xl ${isDarkMode ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-rose-50 text-rose-600'} flex items-center justify-center shrink-0`}>
+                  <div className={`p-3 sm:p-3.5 rounded-2xl ${isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-900'} border space-y-2`}>
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-2xl ${isDarkMode ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-rose-50 text-rose-600'} flex items-center justify-center shrink-0`}>
                         <MapPin className="w-4 h-4" />
                       </div>
-                      <div>
-                        <div className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase tracking-wider`}>Delivery Address</div>
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-[9px] sm:text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase tracking-wider`}>Delivery Address</div>
                         <div className={`text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Shipping Location</div>
                       </div>
                     </div>
-                    <div className={`text-sm sm:text-base ${isDarkMode ? 'text-slate-200' : 'text-slate-800'} font-medium leading-relaxed pl-1`}>
+                    <div className={`text-xs sm:text-base ${isDarkMode ? 'text-slate-200' : 'text-slate-800'} font-medium leading-relaxed pl-1 line-clamp-2`}>
                       {ord.customer.address}
                       {ord.customer.landmark && <span className="text-amber-500 block text-xs mt-0.5 font-medium">Near: {ord.customer.landmark}</span>}
                     </div>
@@ -925,32 +842,32 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                     {ord.items.map((item, idx) => {
                       const itemImg = item.image || (item as any).imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150&q=80';
                       return (
-                        <div key={item.id ? `${item.id}-${idx}` : `item-${idx}`} className={`flex items-center justify-between gap-3 p-3 rounded-2xl ${isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-white border-slate-100 text-slate-900'} border shadow-xs overflow-hidden`}>
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div key={item.id ? `${item.id}-${idx}` : `item-${idx}`} className={`flex items-center justify-between gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl ${isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-white border-slate-100 text-slate-900'} border shadow-xs overflow-hidden`}>
+                          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                             <img
                               src={itemImg}
                               alt={item.name}
-                              className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl object-cover border border-slate-200/60 shrink-0 shadow-xs"
+                              className="w-14 h-14 sm:w-20 sm:h-20 rounded-xl object-cover border border-slate-200/60 shrink-0 shadow-xs"
                               onError={(e) => {
                                 (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150&q=80';
                               }}
                               referrerPolicy="no-referrer"
                             />
                             <div className="min-w-0 flex-1">
-                              <div className={`text-sm sm:text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} leading-snug line-clamp-2`}>{item.name}</div>
-                              <div className={`text-xs sm:text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} font-mono mt-0.5`}>₹{item.price.toFixed(2)} each</div>
+                              <div className={`text-xs sm:text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} leading-snug line-clamp-2`}>{item.name}</div>
+                              <div className={`text-[11px] sm:text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} font-mono mt-0.5`}>₹{item.price.toFixed(2)} each</div>
                             </div>
                           </div>
 
                           {/* Vertical Arrangement for Qty & Total Price to prevent overflowing outside parcel box */}
-                          <div className="flex flex-col items-end gap-1.5 shrink-0">
-                            <div className={`px-2.5 py-1 rounded-xl ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-900'} border flex flex-col items-center justify-center text-center min-w-[70px]`}>
-                              <div className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase font-bold leading-tight`}>Qty</div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <div className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xl ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-900'} border flex flex-col items-center justify-center text-center min-w-[55px] sm:min-w-[70px]`}>
+                              <div className={`text-[8px] sm:text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-400'} uppercase font-bold leading-tight`}>Qty</div>
                               <div className={`text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'} font-mono leading-tight`}>{item.quantity}</div>
                             </div>
 
-                            <div className={`px-2.5 py-1 rounded-xl ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700'} border flex flex-col items-center justify-center text-center min-w-[70px]`}>
-                              <div className={`text-[9px] ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'} uppercase font-bold leading-tight`}>Total</div>
+                            <div className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xl ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700'} border flex flex-col items-center justify-center text-center min-w-[55px] sm:min-w-[70px]`}>
+                              <div className={`text-[8px] sm:text-[9px] ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'} uppercase font-bold leading-tight`}>Total</div>
                               <div className={`text-xs sm:text-sm font-extrabold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'} font-mono leading-tight whitespace-nowrap`}>₹{(item.price * item.quantity).toFixed(2)}</div>
                             </div>
                           </div>
@@ -960,57 +877,55 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                   </div>
                 </div>
 
-
-
                 {/* Worker Action Hub Buttons */}
-                <div className={`pt-2 border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-100'} flex items-center gap-2`}>
+                <div className={`pt-2.5 border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-100'} flex items-center gap-2`}>
                   {ord.status === 'pending' && (
                     <button
                       onClick={(e) => handleWorkerNextAction(ord, e)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
                     >
-                      <Package className="w-3.5 h-3.5" />
-                      <span>Accept & Receive Parcel</span>
+                      <Package className="w-4 h-4 shrink-0" />
+                      <span>Accept & Receive</span>
                     </button>
                   )}
 
                   {ord.status === 'received' && (
                     <button
                       onClick={(e) => handleWorkerNextAction(ord, e)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
                     >
-                      <ShoppingBasket className="w-3.5 h-3.5" />
-                      <span>Mark Packed & Ready</span>
+                      <ShoppingBasket className="w-4 h-4 shrink-0" />
+                      <span>Mark Packed</span>
                     </button>
                   )}
 
                   {ord.status === 'processing' && (
                     <button
                       onClick={(e) => handleWorkerNextAction(ord, e)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
                     >
-                      <Truck className="w-3.5 h-3.5" />
-                      <span>Dispatch (Out for Delivery)</span>
+                      <Truck className="w-4 h-4 shrink-0" />
+                      <span>Dispatch Rider</span>
                     </button>
                   )}
 
                   {ord.status === 'out_for_delivery' && (
                     <button
                       onClick={(e) => handleWorkerNextAction(ord, e)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{isCOD ? `Collect ₹${ord.totalAmount} & Deliver` : 'Mark Delivered'}</span>
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>{isCOD ? `Collect ₹${ord.totalAmount}` : 'Mark Delivered'}</span>
                     </button>
                   )}
 
                   {ord.status === 'delivered' && isPendingPayment && isCOD && (
                     <button
                       onClick={(e) => handleMarkPaymentClear(ord, e)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
                     >
-                      <Coins className="w-3.5 h-3.5" />
-                      <span>Confirm ₹{ord.totalAmount} Cash Clear</span>
+                      <Coins className="w-4 h-4 shrink-0" />
+                      <span>Confirm ₹{ord.totalAmount} Clear</span>
                     </button>
                   )}
 
@@ -1019,10 +934,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                       e.stopPropagation();
                       onSelectOrder(ord);
                     }}
-                    className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition text-xs font-semibold flex items-center gap-1 cursor-pointer min-h-[42px] shrink-0"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>Details</span>
+                    <span className="hidden xs:inline">Details</span>
                   </button>
                 </div>
               </div>

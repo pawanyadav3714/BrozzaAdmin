@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Single-User Lock: System Initialization & Owner Security
+    match /system_security/single_user_lock {
+      // Anyone can read initialization status so the client knows if registration is closed
+      allow read: if true;
+      // ONLY the first user can initialize the lock. Once created, creation is permanently blocked.
+      allow create: if !exists(/databases/$(database)/documents/system_security/single_user_lock) 
+                    && request.auth != null;
+      // Only the verified owner can update login timestamps or profile metadata
+      allow update: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+      // Never allow deletion to ensure immutable single-user ownership
+      allow delete: if false;
+    }
+
+    // Orders & Live Catalog
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Dishes Menu
+    match /dishes/{dishId} {
+      allow read, write: if true;
+    }
+
+    // System Settings & Cafe Status
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
+
+    match /cafe_status/{statusId} {
+      allow read, write: if true;
+    }
+
+    // Default catch-all
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

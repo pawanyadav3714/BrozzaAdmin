@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "SingleUserLock": {
+      "title": "SingleUserLock",
+      "description": "Represents the strict single-user lock for the platform, ensuring only the initial registered user can access the system.",
+      "type": "object",
+      "properties": {
+        "isInitialized": {
+          "type": "boolean",
+          "description": "Whether the platform has been initialized by its primary owner."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the sole platform owner."
+        },
+        "ownerEmail": {
+          "type": "string",
+          "description": "Verified email address of the sole platform owner."
+        },
+        "ownerName": {
+          "type": "string",
+          "description": "Full name of the platform owner."
+        },
+        "ownerFirstName": {
+          "type": "string",
+          "description": "Legal first name of the owner."
+        },
+        "ownerLastName": {
+          "type": "string",
+          "description": "Legal last name of the owner."
+        },
+        "authProvider": {
+          "type": "string",
+          "enum": ["password", "google"],
+          "description": "Authentication method used by the owner."
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when ownership was established."
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the most recent owner login."
+        }
+      },
+      "required": ["isInitialized", "ownerUid", "ownerEmail", "ownerName", "authProvider", "registeredAt"]
+    }
+  },
+  "firestore": {
+    "/system_security/single_user_lock": {
+      "schema": "SingleUserLock",
+      "description": "Singleton configuration holding the sole owner lock. Once created, no further registrations are permitted."
+    }
+  }
+}

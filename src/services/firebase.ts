@@ -16,7 +16,8 @@ import {
   Firestore,
   setLogLevel,
   memoryLocalCache,
-  getDocs
+  getDocs,
+  getDoc
 } from 'firebase/firestore';
 import { 
   getDatabase, 
@@ -27,6 +28,18 @@ import {
   update,
   remove
 } from 'firebase/database';
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged,
+  User as FirebaseUser,
+  updateProfile,
+  Auth
+} from 'firebase/auth';
 import { Order, OrderStatus, PaymentStatus, ParcelType, PaymentMethodType, Product, CafeStatus } from '../types';
 import { INITIAL_PRODUCTS, deduplicateProducts, BAROZZA_CANONICAL_DISHES } from '../data/mockData';
 
@@ -94,6 +107,14 @@ try {
   }
 } catch (err) {
   realtimeDb = null;
+}
+
+// Initialize Firebase Auth singleton
+export let auth: Auth | null = null;
+try {
+  auth = getAuth(app);
+} catch (err) {
+  console.warn("Auth initialization notice:", err);
 }
 
 export interface FirebaseConnectionStatus {
@@ -584,10 +605,29 @@ export function buildAuthoritativeCustomerDishes(
   const closureMessage = status.closureReason || 
     `currently cafe is closed. so I'm sorry boss ! . it will open at ${status.formattedReopenTime || 'Date and Time'}.`;
 
+  const deletedSet = new Set<string>();
+  try {
+    const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+    if (rawDel) {
+      const parsed = JSON.parse(rawDel);
+      if (Array.isArray(parsed)) {
+        parsed.forEach(id => deletedSet.add(String(id).toLowerCase().trim()));
+      }
+    }
+  } catch (e) {}
+
   const dishMap = new Map<string, any>();
 
-  // 1. Seed with the 18 canonical dishes required by brozza.vercel.app
+  // 1. Seed with the 18 canonical dishes required by brozza.vercel.app (excluding deleted ones)
   for (const canon of BAROZZA_CANONICAL_DISHES) {
+    if (
+      deletedSet.has(canon.id.toLowerCase()) || 
+      deletedSet.has(canon.name.toLowerCase().trim()) ||
+      deletedSet.has(`brz-dish-${canon.id.padStart(2, '0')}`)
+    ) {
+      continue;
+    }
+
     dishMap.set(canon.id, {
       id: canon.id,
       dishId: canon.id,
@@ -607,9 +647,23 @@ export function buildAuthoritativeCustomerDishes(
     });
   }
 
-  // 2. Merge current admin products
+  // 2. Merge current admin products (excluding deleted ones)
   const dedupedAdmin = deduplicateProducts(currentProducts);
   for (const p of dedupedAdmin) {
+    const pId = String(p.id || '').toLowerCase();
+    const pDishId = String(p.dishId || '').toLowerCase();
+    const pSku = String(p.sku || '').toLowerCase();
+    const pName = String(p.name || '').toLowerCase().trim();
+
+    if (
+      deletedSet.has(pId) || 
+      deletedSet.has(pDishId) || 
+      deletedSet.has(pSku) || 
+      deletedSet.has(pName)
+    ) {
+      continue;
+    }
+
     // If it corresponds to a canonical dish by dishId or exact name
     const canonMatch = BAROZZA_CANONICAL_DISHES.find(c => 
       c.id === p.dishId || 
@@ -677,20 +731,35 @@ export function buildAuthoritativeCustomerDishes(
     }
   }
 
-  // 3. Merge any extra dishes present in Firestore dishes collection
+  // 3. Merge any extra dishes present in Firestore dishes collection (strictly ignoring any deleted dishes)
   for (const fDoc of extraFirestoreDishes) {
     const fData = fDoc.data;
     if (!fData) continue;
     const key = fDoc.id;
+    const fNameLower = String(fData.name || '').toLowerCase().trim();
+    const fSkuLower = String(fData.sku || '').toLowerCase().trim();
+    const fDishIdLower = String(fData.dishId || key || '').toLowerCase().trim();
+
+    if (
+      deletedSet.has(key.toLowerCase()) || 
+      deletedSet.has(fNameLower) || 
+      deletedSet.has(fSkuLower) || 
+      deletedSet.has(fDishIdLower)
+    ) {
+      continue;
+    }
     
     // Check if this matches a canonical dish by ID or by name
     const canonMatch = BAROZZA_CANONICAL_DISHES.find(c => 
       c.id === key || 
-      c.name.trim().toLowerCase() === (fData.name || '').trim().toLowerCase() ||
-      (c.id === '3' && (fData.name || '').toLowerCase().includes('chowmin'))
+      c.name.trim().toLowerCase() === fNameLower ||
+      (c.id === '3' && fNameLower.includes('chowmin'))
     );
 
     if (canonMatch) {
+      if (deletedSet.has(canonMatch.id.toLowerCase()) || deletedSet.has(canonMatch.name.toLowerCase().trim())) {
+        continue;
+      }
       const existing = dishMap.get(canonMatch.id);
       // When cafe is open, never inherit stale closure availability/stock
       const isAvail = status.isOpen;
@@ -735,14 +804,15 @@ export function buildAuthoritativeCustomerDishes(
         : `${fData.name || 'Dish'} freshly prepared at The Barozza Cafe.`;
       const desc = status.isOpen ? cleanDesc : closureMessage;
 
+      const dishImage = existing?.imageUrl || existing?.image || fData.imageUrl || fData.image || "/images/frenchh.png";
       dishMap.set(finalKey, {
         id: finalKey,
         dishId: finalKey,
         sku: fData.sku || existing?.sku || `BRZ-CUST-${finalKey}`,
         name: fData.name || `Dish ${finalKey}`,
         price: Number(fData.price || existing?.price || 50),
-        image: fData.image || fData.imageUrl || existing?.image || "/images/frenchh.png",
-        imageUrl: fData.imageUrl || fData.image || existing?.imageUrl || "/images/frenchh.png",
+        image: dishImage,
+        imageUrl: dishImage,
         description: desc,
         originalDescription: cleanDesc,
         category: fData.category || existing?.category || "General",
@@ -757,21 +827,53 @@ export function buildAuthoritativeCustomerDishes(
 
   // Final check:
   if (status.isOpen) {
-    // When cafe is OPEN: Enforce that all dishes are available with positive stock and keep the renamed dish name
+    // When cafe is OPEN: Default all dishes count to 25 till the owner setZero on their own
+    const ownerZeroSet = new Set<string>();
+    try {
+      const rawZero = localStorage.getItem("barozza_owner_zero_dishes");
+      if (rawZero) {
+        const parsedZero = JSON.parse(rawZero);
+        if (Array.isArray(parsedZero)) {
+          parsedZero.forEach(z => ownerZeroSet.add(String(z).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
     for (const [k, d] of dishMap.entries()) {
       const canon = BAROZZA_CANONICAL_DISHES.find(c => c.id === k);
       let desc = d.description;
       if (!desc || desc.includes("currently cafe is closed") || desc.includes("sorry boss")) {
         desc = d.originalDescription || canon?.description || `${d.name} freshly prepared at The Barozza Cafe.`;
       }
+
+      const dIdLower = String(d.id || k).toLowerCase().trim();
+      const dDishIdLower = String(d.dishId || k).toLowerCase().trim();
+      const dSkuLower = String(d.sku || '').toLowerCase().trim();
+      const dNameLower = String(d.name || '').toLowerCase().trim();
+
+      const isOwnerZero = 
+        ownerZeroSet.has(dIdLower) || 
+        ownerZeroSet.has(dDishIdLower) || 
+        ownerZeroSet.has(dSkuLower) || 
+        ownerZeroSet.has(dNameLower);
+
+      let finalStock = 25;
+      if (isOwnerZero) {
+        finalStock = 0;
+      } else if (typeof d.stock === 'number' && d.stock > 0) {
+        finalStock = d.stock;
+      } else {
+        finalStock = 25;
+      }
+
       dishMap.set(k, {
         ...d,
         name: d.name || (canon ? canon.name : `Dish ${k}`),
         image: d.imageUrl || d.image || (canon ? canon.imageUrl : '/images/frenchh.png'),
         imageUrl: d.imageUrl || d.image || (canon ? canon.imageUrl : '/images/frenchh.png'),
         category: d.category || (canon ? canon.category : 'General'),
-        available: typeof d.stock === 'number' ? d.stock > 0 : true,
-        stock: typeof d.stock === 'number' ? d.stock : 25,
+        available: finalStock > 0,
+        stock: finalStock,
         cafeClosed: false,
         description: desc,
         originalDescription: d.originalDescription || canon?.description || desc,
@@ -794,7 +896,14 @@ export function buildAuthoritativeCustomerDishes(
     }
   }
 
-  return Array.from(dishMap.values());
+  // Strictly filter out any dish whose id, dishId, sku, or name is in deletedSet
+  return Array.from(dishMap.values()).filter(d => {
+    const dId = String(d.id || '').toLowerCase().trim();
+    const dDishId = String(d.dishId || '').toLowerCase().trim();
+    const dSku = String(d.sku || '').toLowerCase().trim();
+    const dName = String(d.name || '').toLowerCase().trim();
+    return !deletedSet.has(dId) && !deletedSet.has(dDishId) && !deletedSet.has(dSku) && !deletedSet.has(dName);
+  });
 }
 
 /**
@@ -820,24 +929,20 @@ export async function syncDishesToFirestoreAndStore(products: Product[]): Promis
   // 2. Broadcast across tabs and windows
   try {
     if (typeof BroadcastChannel !== 'undefined') {
-      const bc1 = new BroadcastChannel("barozza_cafe_dishes");
-      bc1.postMessage({ type: 'DISHES_UPDATED', dishes: customerDishes, products });
-      bc1.close();
-
-      const bc2 = new BroadcastChannel("barozza_menu_sync");
-      bc2.postMessage({ type: 'DISHES_UPDATED', dishes: customerDishes, products });
-      bc2.close();
+      ['barozza_cafe_dishes', 'barozza_menu_sync'].forEach(chName => {
+        try {
+          const bc = new BroadcastChannel(chName);
+          bc.postMessage({ type: 'DISHES_UPDATED', dishes: customerDishes, products });
+          setTimeout(() => { try { bc.close(); } catch (e) {} }, 3000);
+        } catch (e) {}
+      });
     }
-  } catch (e) {
-    //
-  }
+  } catch (e) {}
 
   // 3. PostMessage to any listening frames / tabs
   try {
     window.postMessage({ type: 'BAROZZA_DISHES_UPDATED', dishes: customerDishes }, '*');
-  } catch (e) {
-    //
-  }
+  } catch (e) {}
 
   // 4. Update Firestore doc orders/barozza_menu_catalog & dishes collection
   try {
@@ -861,7 +966,7 @@ export async function syncDishesToFirestoreAndStore(products: Product[]): Promis
 
       await Promise.allSettled(
         customerDishes.map(dish => 
-          setDoc(doc(firestoreDb, 'dishes', dish.id), {
+          setDoc(doc(firestoreDb!, 'dishes', dish.id), {
             id: dish.id,
             dishId: dish.id,
             name: dish.name,
@@ -886,6 +991,95 @@ export async function syncDishesToFirestoreAndStore(products: Product[]): Promis
 }
 
 /**
+ * Permanently delete a dish from Firestore menu catalog and individual dishes collection
+ */
+export async function deleteDishFromFirestoreCatalog(targetProduct: Product): Promise<void> {
+  if (!firestoreDb || !targetProduct) return;
+  try {
+    const idLower = String(targetProduct.id || '').toLowerCase().trim();
+    const dishIdLower = String(targetProduct.dishId || '').toLowerCase().trim();
+    const skuLower = String(targetProduct.sku || '').toLowerCase().trim();
+    const nameLower = String(targetProduct.name || '').toLowerCase().trim();
+
+    const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+    const catalogSnap = await getDoc(catalogDocRef);
+    if (catalogSnap.exists()) {
+      const data = catalogSnap.data();
+      const list = data.dishes || data.customerDishes || [];
+      const prevDeleted = Array.isArray(data.deletedDishIds) ? data.deletedDishIds : [];
+      const newDeletedIds = Array.from(new Set([
+        ...prevDeleted,
+        idLower,
+        dishIdLower,
+        skuLower,
+        nameLower,
+        targetProduct.id,
+        targetProduct.dishId,
+        targetProduct.sku,
+        targetProduct.name
+      ])).filter(Boolean);
+
+      const newDishes = list.filter((d: any) => {
+        const dId = String(d.id || '').toLowerCase().trim();
+        const dDishId = String(d.dishId || '').toLowerCase().trim();
+        const dSku = String(d.sku || '').toLowerCase().trim();
+        const dName = String(d.name || '').toLowerCase().trim();
+        return (
+          dId !== idLower &&
+          dDishId !== dishIdLower &&
+          dDishId !== idLower &&
+          dId !== dishIdLower &&
+          dSku !== skuLower &&
+          dName !== nameLower
+        );
+      });
+
+      await setDoc(catalogDocRef, {
+        ...data,
+        dishes: newDishes,
+        customerDishes: newDishes,
+        totalDishes: newDishes.length,
+        deletedDishIds: newDeletedIds,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+
+    // Delete all document variants from 'dishes' collection
+    const keysToDelete = [targetProduct.id, targetProduct.dishId, targetProduct.sku].filter(Boolean);
+    for (const key of keysToDelete) {
+      if (key) {
+        await deleteDoc(doc(firestoreDb, 'dishes', String(key))).catch(() => {});
+      }
+    }
+
+    // Also delete any document in 'dishes' collection whose data matches name or dishId
+    try {
+      const dishesSnap = await getDocs(collection(firestoreDb, 'dishes'));
+      for (const d of dishesSnap.docs) {
+        const data = d.data();
+        const dName = String(data.name || '').toLowerCase().trim();
+        const dDishId = String(data.dishId || '').toLowerCase().trim();
+        if (dName === nameLower || dDishId === dishIdLower || d.id === targetProduct.id || d.id === targetProduct.dishId) {
+          await deleteDoc(doc(firestoreDb, 'dishes', d.id)).catch(() => {});
+        }
+      }
+    } catch (e) {}
+
+    // Also if Realtime DB is connected, remove from RTDB
+    if (realtimeDb) {
+      for (const key of keysToDelete) {
+        if (key) {
+          await remove(ref(realtimeDb, `dishes/${key}`)).catch(() => {});
+          await remove(ref(realtimeDb, `menu/${key}`)).catch(() => {});
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Firestore permanent dish delete error:", e);
+  }
+}
+
+/**
  * Listen to live catalog updates in Firestore so dishes and prices stay in sync with customer dashboard
  */
 export function listenToCatalogDishes(
@@ -899,7 +1093,31 @@ export function listenToCatalogDishes(
         const data = snap.data();
         const list = data.dishes || data.customerDishes;
         if (Array.isArray(list) && list.length > 0) {
-          onUpdate(list);
+          // Read local deleted dish registry
+          const deletedSet = new Set<string>();
+          try {
+            const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+            if (rawDel) {
+              const parsed = JSON.parse(rawDel);
+              if (Array.isArray(parsed)) {
+                parsed.forEach(x => deletedSet.add(String(x).toLowerCase().trim()));
+              }
+            }
+          } catch (e) {}
+
+          if (Array.isArray(data.deletedDishIds)) {
+            data.deletedDishIds.forEach((x: any) => deletedSet.add(String(x).toLowerCase().trim()));
+          }
+
+          const filtered = list.filter((d: any) => {
+            const dId = String(d.id || '').toLowerCase().trim();
+            const dDishId = String(d.dishId || '').toLowerCase().trim();
+            const dSku = String(d.sku || '').toLowerCase().trim();
+            const dName = String(d.name || '').toLowerCase().trim();
+            return !deletedSet.has(dId) && !deletedSet.has(dDishId) && !deletedSet.has(dSku) && !deletedSet.has(dName);
+          });
+
+          onUpdate(filtered);
         }
       }
     }, (err) => {
@@ -949,11 +1167,12 @@ export function getInitialCafeStatus(): CafeStatus {
 
 /**
  * Synchronize Cafe Status across:
- * 1. Firebase Firestore (orders/barozza_cafe_status, orders/cafe_status, settings/cafe_status)
+ * 1. Firebase Firestore (orders/barozza_cafe_status, orders/cafe_status, settings/cafe_status, orders/barozza_menu_catalog)
  * 2. Firebase Realtime Database (cafe_status, orders/cafe_status, barozza_cafe_status)
- * 3. LocalStorage (barozza_cafe_status)
- * 4. BroadcastChannels (barozza_cafe_status, customer_cafe_status)
- * 5. Cross-window postMessage
+ * 3. LocalStorage (barozza_cafe_status & barozza_cafe_dishes)
+ * 4. BroadcastChannels (barozza_cafe_status, customer_cafe_status, cafe_status)
+ * 5. Cross-window postMessage & custom DOM events
+ * Runs status writes concurrently for zero-delay instant propagation.
  */
 export async function syncCafeStatusToFirebaseAndStore(
   status: CafeStatus, 
@@ -968,33 +1187,67 @@ export async function syncCafeStatusToFirebaseAndStore(
   const closureMessage = status.closureReason || 
     `currently cafe is closed. so I'm sorry boss ! . it will open at ${status.formattedReopenTime || 'Date and Time'}.`;
 
-  // 1. LocalStorage
+  // 1. LocalStorage (Immediate synchronous update)
   try {
     localStorage.setItem('barozza_cafe_status', JSON.stringify(status));
   } catch (e) {
     console.warn("Error writing cafe status to localStorage:", e);
   }
 
-  // 2. BroadcastChannel
+  // 2. Custom DOM Event (Instant 0ms in-window propagation)
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('barozza_cafe_status_change', { detail: status }));
+    }
+  } catch (e) {}
+
+  // 3. BroadcastChannel (Cross-tab instant sync without early channel termination)
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       ['barozza_cafe_status', 'customer_cafe_status', 'cafe_status'].forEach(channelName => {
         try {
           const bc = new BroadcastChannel(channelName);
           bc.postMessage({ type: 'CAFE_STATUS_CHANGED', status });
-          bc.close();
+          setTimeout(() => {
+            try { bc.close(); } catch (e) {}
+          }, 3000);
         } catch (e) {}
       });
     }
   } catch (e) {}
 
-  // 3. PostMessage for iframe / parent communication
+  // 4. PostMessage for iframe / parent communication
   try {
-    window.postMessage({ type: 'BAROZZA_CAFE_STATUS_UPDATE', status }, '*');
+    if (typeof window !== 'undefined') {
+      window.postMessage({ type: 'BAROZZA_CAFE_STATUS_UPDATE', status }, '*');
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'BAROZZA_CAFE_STATUS_UPDATE', status }, '*');
+      }
+      if (window.opener) {
+        window.opener.postMessage({ type: 'BAROZZA_CAFE_STATUS_UPDATE', status }, '*');
+      }
+    }
   } catch (e) {}
 
-  // 4. Resolve products list to sync dishes availability with brozza.vercel.app
+  // 5. Resolve products list to sync dishes availability
+  // When cafe is opened: clear manual zero set so default 25 count applies for every open of cafe
+  if (status.isOpen) {
+    try {
+      localStorage.removeItem("barozza_owner_zero_dishes");
+    } catch (e) {}
+  }
+
   let prods = currentProducts;
+  if (status.isOpen && prods && prods.length > 0) {
+    // Ensure all dishes passed have stock 25 by default upon open
+    prods = prods.map(p => ({
+      ...p,
+      stock: 25,
+      status: 'in_stock' as const,
+      available: true,
+      cafeClosed: false
+    }));
+  }
   if (!prods || prods.length === 0) {
     try {
       const saved = localStorage.getItem("barozza_admin_products");
@@ -1011,55 +1264,48 @@ export async function syncCafeStatusToFirebaseAndStore(
   }
 
   // Pre-build dishes for instant localStorage & BroadcastChannel distribution
-  let syncedCustomerDishes = buildAuthoritativeCustomerDishes(status, prods);
+  const syncedCustomerDishes = buildAuthoritativeCustomerDishes(status, prods);
 
   // Save customer dishes to localStorage for brozza.vercel.app shared tab cache
   try {
     localStorage.setItem("barozza_cafe_dishes", JSON.stringify(syncedCustomerDishes));
     if (typeof BroadcastChannel !== 'undefined') {
-      const bc1 = new BroadcastChannel("barozza_cafe_dishes");
-      bc1.postMessage({ type: 'DISHES_UPDATED', dishes: syncedCustomerDishes, cafeStatus: status });
-      bc1.close();
-
-      const bc2 = new BroadcastChannel("barozza_menu_sync");
-      bc2.postMessage({ type: 'DISHES_UPDATED', dishes: syncedCustomerDishes, cafeStatus: status });
-      bc2.close();
+      ['barozza_cafe_dishes', 'barozza_menu_sync'].forEach(chName => {
+        try {
+          const bc = new BroadcastChannel(chName);
+          bc.postMessage({ type: 'DISHES_UPDATED', dishes: syncedCustomerDishes, cafeStatus: status });
+          setTimeout(() => {
+            try { bc.close(); } catch (e) {}
+          }, 3000);
+        } catch (e) {}
+      });
     }
   } catch (e) {}
 
-  // 5. Firestore sync
-  try {
-    if (firestoreDb) {
-      // Standard cafe status document paths
-      const docPaths = [
-        ['orders', 'barozza_cafe_status'],
-        ['orders', 'cafe_status'],
-        ['settings', 'cafe_status'],
-        ['cafe_status', 'status']
-      ] as const;
+  // 6. Ultra-Fast Parallel Cloud Sync: Fire all Firestore status paths + RTDB paths simultaneously!
+  const syncPromises: Promise<any>[] = [];
 
-      await Promise.allSettled(
-        docPaths.map(([col, docId]) => 
-          setDoc(doc(firestoreDb, col, docId), payload, { merge: true })
-        )
+  // Firestore status documents & menu catalog
+  if (firestoreDb) {
+    const docPaths = [
+      ['orders', 'barozza_cafe_status'],
+      ['orders', 'cafe_status'],
+      ['settings', 'cafe_status'],
+      ['cafe_status', 'status']
+    ] as const;
+
+    docPaths.forEach(([col, docId]) => {
+      syncPromises.push(
+        setDoc(doc(firestoreDb!, col, docId), payload, { merge: true }).catch(err => {
+          console.warn(`Firestore status sync error on ${col}/${docId}:`, err);
+        })
       );
+    });
 
-      // Fetch all existing dishes from the 'dishes' collection so ANY existing document is guaranteed closed/open
-      let existingDishDocs: Array<{ id: string; data: any }> = [];
-      try {
-        const dishesSnap = await getDocs(collection(firestoreDb, 'dishes'));
-        existingDishDocs = dishesSnap.docs.map(d => ({ id: d.id, data: d.data() }));
-      } catch (e) {
-        console.warn("Could not pre-fetch dishes collection:", e);
-      }
-
-      // Re-build authoritative dishes combining canonical + admin + existing firestore docs
-      syncedCustomerDishes = buildAuthoritativeCustomerDishes(status, prods, existingDishDocs);
-
-      // Push updated dishes and status to orders/barozza_menu_catalog
-      // (This directly controls brozza.vercel.app catalog subscription)
-      const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
-      await setDoc(catalogDocRef, {
+    // Also immediately update orders/barozza_menu_catalog which controls customer storefront
+    const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+    syncPromises.push(
+      setDoc(catalogDocRef, {
         isCatalog: true,
         type: 'menu_catalog',
         storeName: 'The Barozza Cafe',
@@ -1073,55 +1319,55 @@ export async function syncCafeStatusToFirebaseAndStore(
         dishes: syncedCustomerDishes,
         customerDishes: syncedCustomerDishes,
         totalDishes: syncedCustomerDishes.length
-      }, { merge: true });
-
-      // Update every dish in the 'dishes' collection (which brozza.vercel.app also subscribes to)
-      await Promise.allSettled(
-        syncedCustomerDishes.map(dish => 
-          setDoc(doc(firestoreDb, 'dishes', dish.id), {
-            id: dish.id,
-            dishId: dish.id,
-            name: dish.name,
-            price: dish.price,
-            category: dish.category,
-            description: dish.description,
-            image: dish.image,
-            imageUrl: dish.imageUrl,
-            available: dish.available,
-            stock: dish.stock,
-            cafeClosed: !status.isOpen,
-            reopenTime: status.isOpen ? '' : (status.reopenTime || ''),
-            formattedReopenTime: status.isOpen ? '' : (status.formattedReopenTime || ''),
-            lastUpdated: new Date().toISOString()
-          }, { merge: true })
-        )
-      );
-
-      // Clean up any stray non-canonical docs in 'dishes' (e.g., test doc 65)
-      if (status.isOpen && existingDishDocs.length > 0) {
-        for (const docObj of existingDishDocs) {
-          if (!syncedCustomerDishes.some(d => d.id === docObj.id)) {
-            try {
-              await deleteDoc(doc(firestoreDb, 'dishes', docObj.id));
-            } catch (e) {}
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Error syncing cafe status to Firestore:", err);
+      }, { merge: true }).catch(err => {
+        console.warn("Firestore menu catalog status sync error:", err);
+      })
+    );
   }
 
-  // 6. Firebase Realtime Database (RTDB) sync
-  try {
-    if (realtimeDb) {
-      const rtdbPaths = ['cafe_status', 'orders/cafe_status', 'barozza_cafe_status', 'status'];
-      await Promise.allSettled(
-        rtdbPaths.map(p => set(ref(realtimeDb, p), payload))
+  // Firebase Realtime Database (RTDB) sync (executed in the exact same concurrent burst)
+  if (realtimeDb) {
+    const rtdbPaths = ['cafe_status', 'orders/cafe_status', 'barozza_cafe_status', 'status'];
+    rtdbPaths.forEach(p => {
+      syncPromises.push(
+        set(ref(realtimeDb!, p), payload).catch(err => {
+          console.warn(`RTDB status sync error on ${p}:`, err);
+        })
       );
-    }
-  } catch (err) {
-    console.warn("Error syncing cafe status to Realtime Database:", err);
+    });
+  }
+
+  // Wait for the primary instant status writes to complete
+  await Promise.allSettled(syncPromises);
+
+  // 7. Background update for individual dishes in 'dishes' collection (fire-and-forget so UI is never delayed)
+  if (firestoreDb) {
+    (async () => {
+      try {
+        await Promise.allSettled(
+          syncedCustomerDishes.map(dish => 
+            setDoc(doc(firestoreDb!, 'dishes', dish.id), {
+              id: dish.id,
+              dishId: dish.id,
+              name: dish.name,
+              price: dish.price,
+              category: dish.category,
+              description: dish.description,
+              image: dish.image,
+              imageUrl: dish.imageUrl,
+              available: dish.available,
+              stock: dish.stock,
+              cafeClosed: !status.isOpen,
+              reopenTime: status.isOpen ? '' : (status.reopenTime || ''),
+              formattedReopenTime: status.isOpen ? '' : (status.formattedReopenTime || ''),
+              lastUpdated: new Date().toISOString()
+            }, { merge: true })
+          )
+        );
+      } catch (e) {
+        console.warn("Background dish collection update notice:", e);
+      }
+    })();
   }
 }
 
@@ -1132,8 +1378,9 @@ export function listenToCafeStatus(
   onUpdate: (status: CafeStatus) => void
 ): () => void {
   const broadcastChannels: BroadcastChannel[] = [];
+  let isCleanedUp = false;
   
-  // BroadcastChannel listener for multi-tab sync
+  // 1. BroadcastChannel listener for multi-tab sync
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       ['barozza_cafe_status', 'customer_cafe_status', 'cafe_status'].forEach(chName => {
@@ -1150,7 +1397,7 @@ export function listenToCafeStatus(
     }
   } catch (e) {}
 
-  // Storage event listener
+  // 2. Storage event listener (cross-window)
   const handleStorage = (e: StorageEvent) => {
     if (e.key === 'barozza_cafe_status' && e.newValue) {
       try {
@@ -1161,7 +1408,16 @@ export function listenToCafeStatus(
   };
   window.addEventListener('storage', handleStorage);
 
-  // Message event listener (postMessage)
+  // 3. Custom in-window event (0ms intra-window dispatch)
+  const handleCustomEvent = (e: Event) => {
+    const customEvt = e as CustomEvent<CafeStatus>;
+    if (customEvt.detail) {
+      onUpdate(customEvt.detail);
+    }
+  };
+  window.addEventListener('barozza_cafe_status_change', handleCustomEvent);
+
+  // 4. Message event listener (postMessage)
   const handleWindowMessage = (e: MessageEvent) => {
     if (e.data && e.data.type === 'BAROZZA_CAFE_STATUS_UPDATE' && e.data.status) {
       onUpdate(e.data.status);
@@ -1169,9 +1425,35 @@ export function listenToCafeStatus(
   };
   window.addEventListener('message', handleWindowMessage);
 
-  // Firestore listener
+  // 5. Polling fallback (every 800ms) to ensure zero desync even if backgrounded
+  const pollInterval = setInterval(() => {
+    if (isCleanedUp) return;
+    try {
+      const saved = localStorage.getItem('barozza_cafe_status');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed.isOpen === 'boolean') {
+          // Check if reopen time passed
+          if (!parsed.isOpen && parsed.reopenTime) {
+            const reopenTs = new Date(parsed.reopenTime).getTime();
+            if (!isNaN(reopenTs) && Date.now() >= reopenTs) {
+              const autoOpen: CafeStatus = { ...parsed, isOpen: true, reopenTime: '', formattedReopenTime: '' };
+              localStorage.setItem('barozza_cafe_status', JSON.stringify(autoOpen));
+              onUpdate(autoOpen);
+              return;
+            }
+          }
+          // Notify current status
+          onUpdate(parsed);
+        }
+      }
+    } catch (e) {}
+  }, 800);
+
+  // 6. Firestore listeners (Primary status doc + Menu catalog doc)
   let unsubFirestore1 = () => {};
   let unsubFirestore2 = () => {};
+  let unsubFirestore3 = () => {};
   if (firestoreDb) {
     try {
       const statusDocRef = doc(firestoreDb, 'orders', 'barozza_cafe_status');
@@ -1211,10 +1493,26 @@ export function listenToCafeStatus(
           }
         }
       }, () => {});
+
+      const catalogDocRef = doc(firestoreDb, 'orders', 'barozza_menu_catalog');
+      unsubFirestore3 = onSnapshot(catalogDocRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const openVal = typeof data.isOpen === 'boolean' ? data.isOpen : (typeof data.isCafeOpen === 'boolean' ? data.isCafeOpen : undefined);
+          if (typeof openVal === 'boolean') {
+            onUpdate({
+              isOpen: openVal,
+              reopenTime: data.reopenTime || '',
+              formattedReopenTime: data.formattedReopenTime || '',
+              closureReason: data.closureMessage
+            });
+          }
+        }
+      }, () => {});
     } catch (e) {}
   }
 
-  // Realtime Database listener
+  // 7. Realtime Database listener
   let unsubRTDB = () => {};
   if (realtimeDb) {
     try {
@@ -1236,13 +1534,499 @@ export function listenToCafeStatus(
   }
 
   return () => {
-    broadcastChannels.forEach(bc => bc.close());
+    isCleanedUp = true;
+    clearInterval(pollInterval);
+    broadcastChannels.forEach(bc => {
+      try { bc.close(); } catch (e) {}
+    });
     window.removeEventListener('storage', handleStorage);
+    window.removeEventListener('barozza_cafe_status_change', handleCustomEvent);
     window.removeEventListener('message', handleWindowMessage);
     unsubFirestore1();
     unsubFirestore2();
+    unsubFirestore3();
     unsubRTDB();
   };
 }
+
+// =========================================================================
+// STRICT SINGLE-USER LOCK & AUTHENTICATION SYSTEM
+// =========================================================================
+
+export interface SingleUserLock {
+  isInitialized: boolean;
+  ownerUid: string;
+  ownerEmail: string;
+  ownerName: string;
+  ownerFirstName?: string;
+  ownerLastName?: string;
+  authProvider: 'password' | 'google';
+  registeredAt: string;
+  lastLoginAt: string;
+}
+
+export interface RegisterOwnerData {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginOwnerData {
+  email: string;
+  password: string;
+}
+
+export interface AuthOwnerUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  firstName?: string;
+  lastName?: string;
+  photoURL?: string;
+  provider: 'password' | 'google';
+}
+
+const DEFAULT_UNINITIALIZED_LOCK: SingleUserLock = {
+  isInitialized: false,
+  ownerUid: '',
+  ownerEmail: '',
+  ownerName: '',
+  authProvider: 'password',
+  registeredAt: '',
+  lastLoginAt: ''
+};
+
+let inMemoryLockCache: SingleUserLock | null = null;
+
+/**
+ * Retrieves the authoritative single-user lock status from fast in-memory/localStorage cache (0ms),
+ * or Firestore with zero blocking delay.
+ */
+export async function getSingleUserLock(forceNetworkRefresh = false): Promise<SingleUserLock> {
+  // Fast path 1: In-memory cache (0ms)
+  if (!forceNetworkRefresh && inMemoryLockCache && inMemoryLockCache.isInitialized) {
+    return inMemoryLockCache;
+  }
+
+  // Fast path 2: Check localStorage cache (0ms)
+  if (!forceNetworkRefresh) {
+    try {
+      const cached = localStorage.getItem('barozza_single_user_lock');
+      if (cached) {
+        const parsed = JSON.parse(cached) as SingleUserLock;
+        if (parsed && parsed.isInitialized) {
+          inMemoryLockCache = parsed;
+          return parsed;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Fast path 3: Firestore with fast 800ms race timeout
+  if (firestoreDb) {
+    try {
+      const lockDocRef = doc(firestoreDb, 'system_security', 'single_user_lock');
+      const fetchPromise = getDoc(lockDocRef);
+      const snap = await Promise.race([
+        fetchPromise,
+        new Promise<null>((r) => setTimeout(() => r(null), 800))
+      ]);
+      if (snap && snap.exists()) {
+        const data = snap.data() as SingleUserLock;
+        if (data && data.isInitialized) {
+          inMemoryLockCache = data;
+          try {
+            localStorage.setItem('barozza_single_user_lock', JSON.stringify(data));
+          } catch (e) {}
+          return data;
+        }
+      }
+    } catch (err) {
+      console.warn("Firestore single_user_lock read warning:", err);
+    }
+  }
+
+  // Fallback to localStorage
+  try {
+    const cached = localStorage.getItem('barozza_single_user_lock');
+    if (cached) {
+      const parsed = JSON.parse(cached) as SingleUserLock;
+      if (parsed && parsed.isInitialized) {
+        inMemoryLockCache = parsed;
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  return DEFAULT_UNINITIALIZED_LOCK;
+}
+
+/**
+ * Real-time listener for the single-user lock status across Firestore and tabs
+ */
+export function subscribeToSingleUserLock(
+  onUpdate: (lock: SingleUserLock) => void
+): () => void {
+  let unsubFirestore = () => {};
+
+  if (firestoreDb) {
+    try {
+      const lockDocRef = doc(firestoreDb, 'system_security', 'single_user_lock');
+      unsubFirestore = onSnapshot(lockDocRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as SingleUserLock;
+          if (data && data.isInitialized) {
+            inMemoryLockCache = data;
+            try {
+              localStorage.setItem('barozza_single_user_lock', JSON.stringify(data));
+            } catch (e) {}
+            onUpdate(data);
+            return;
+          }
+        }
+        // If doc does not exist
+        inMemoryLockCache = DEFAULT_UNINITIALIZED_LOCK;
+        onUpdate(DEFAULT_UNINITIALIZED_LOCK);
+      }, (err) => {
+        if (err.code === 'unavailable') return;
+        console.warn("single_user_lock subscription notice:", err?.message || err);
+      });
+    } catch (e) {}
+  }
+
+  const handleStorage = (e: StorageEvent) => {
+    if (e.key === 'barozza_single_user_lock' && e.newValue) {
+      try {
+        const parsed = JSON.parse(e.newValue);
+        inMemoryLockCache = parsed;
+        onUpdate(parsed);
+      } catch (err) {}
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  const handleCustomEvent = (e: Event) => {
+    const custom = e as CustomEvent<SingleUserLock>;
+    if (custom.detail) {
+      inMemoryLockCache = custom.detail;
+      onUpdate(custom.detail);
+    }
+  };
+  window.addEventListener('barozza_lock_updated', handleCustomEvent);
+
+  return () => {
+    unsubFirestore();
+    window.removeEventListener('storage', handleStorage);
+    window.removeEventListener('barozza_lock_updated', handleCustomEvent);
+  };
+}
+
+/**
+ * Register the sole platform owner using Email/Password.
+ * STRICT: Throws immediately if a user is already registered.
+ */
+export async function registerFirstOwnerWithEmail(
+  data: RegisterOwnerData
+): Promise<{ user: AuthOwnerUser; lock: SingleUserLock }> {
+  if (!auth) {
+    throw new Error("Authentication service is unavailable. Please verify connection.");
+  }
+
+  const currentLock = await getSingleUserLock();
+  if (currentLock.isInitialized) {
+    throw new Error("Don't try to Enter this, You're not an OWNER");
+  }
+
+  const cleanEmail = data.email.toLowerCase().trim();
+  const fullName = `${data.firstName.trim()} ${data.lastName.trim()}`.trim();
+
+  // 1. Create the Firebase Auth user
+  const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, data.password);
+  const fbUser = userCred.user;
+
+  // 2. Set user display name
+  try {
+    await updateProfile(fbUser, { displayName: fullName });
+  } catch (e) {}
+
+  // 3. Establish the immutable single-user lock
+  const newLock: SingleUserLock = {
+    isInitialized: true,
+    ownerUid: fbUser.uid,
+    ownerEmail: cleanEmail,
+    ownerName: fullName,
+    ownerFirstName: data.firstName.trim(),
+    ownerLastName: data.lastName.trim(),
+    authProvider: 'password',
+    registeredAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString()
+  };
+
+  // 4. Save to Firestore
+  if (firestoreDb) {
+    try {
+      const lockDocRef = doc(firestoreDb, 'system_security', 'single_user_lock');
+      await setDoc(lockDocRef, newLock, { merge: true });
+    } catch (e) {
+      console.warn("Could not write single_user_lock to Firestore:", e);
+    }
+  }
+
+  // 5. Persist to localStorage & dispatch
+  try {
+    localStorage.setItem('barozza_single_user_lock', JSON.stringify(newLock));
+    localStorage.setItem('barozza_auth_session', JSON.stringify({
+      uid: fbUser.uid,
+      email: cleanEmail,
+      displayName: fullName,
+      provider: 'password'
+    }));
+    window.dispatchEvent(new CustomEvent('barozza_lock_updated', { detail: newLock }));
+  } catch (e) {}
+
+  const authUser: AuthOwnerUser = {
+    uid: fbUser.uid,
+    email: cleanEmail,
+    displayName: fullName,
+    firstName: data.firstName.trim(),
+    lastName: data.lastName.trim(),
+    provider: 'password'
+  };
+
+  return { user: authUser, lock: newLock };
+}
+
+/**
+ * Sign in as the registered platform owner using Email/Password.
+ * STRICT: Rejects any user who is not the registered owner.
+ */
+export async function loginOwnerWithEmail(
+  data: LoginOwnerData
+): Promise<{ user: AuthOwnerUser; lock: SingleUserLock }> {
+  if (!auth) {
+    throw new Error("Authentication service is unavailable.");
+  }
+
+  const currentLock = await getSingleUserLock();
+  if (!currentLock.isInitialized) {
+    throw new Error("System is not yet initialized. Please complete owner registration first.");
+  }
+
+  const cleanEmail = data.email.toLowerCase().trim();
+
+  // Strict pre-check
+  if (cleanEmail !== currentLock.ownerEmail.toLowerCase().trim()) {
+    throw new Error("Don't try to Enter this, You're not an OWNER");
+  }
+
+  // Sign in with Firebase Auth
+  const userCred = await signInWithEmailAndPassword(auth, cleanEmail, data.password);
+  const fbUser = userCred.user;
+
+  // Post-check verification
+  if (
+    fbUser.uid !== currentLock.ownerUid && 
+    (fbUser.email || '').toLowerCase().trim() !== currentLock.ownerEmail.toLowerCase().trim()
+  ) {
+    await signOut(auth);
+    throw new Error("Don't try to Enter this, You're not an OWNER");
+  }
+
+  // Update last login (non-blocking in background)
+  const updatedLock: SingleUserLock = {
+    ...currentLock,
+    lastLoginAt: new Date().toISOString()
+  };
+  inMemoryLockCache = updatedLock;
+
+  try {
+    localStorage.setItem('barozza_single_user_lock', JSON.stringify(updatedLock));
+    localStorage.setItem('barozza_auth_session', JSON.stringify({
+      uid: fbUser.uid,
+      email: cleanEmail,
+      displayName: currentLock.ownerName,
+      provider: 'password'
+    }));
+  } catch (e) {}
+
+  if (firestoreDb) {
+    const lockDocRef = doc(firestoreDb, 'system_security', 'single_user_lock');
+    setDoc(lockDocRef, { lastLoginAt: updatedLock.lastLoginAt }, { merge: true }).catch(() => {});
+  }
+
+  const authUser: AuthOwnerUser = {
+    uid: fbUser.uid,
+    email: cleanEmail,
+    displayName: currentLock.ownerName,
+    firstName: currentLock.ownerFirstName,
+    lastName: currentLock.ownerLastName,
+    provider: 'password'
+  };
+
+  return { user: authUser, lock: updatedLock };
+}
+
+/**
+ * Authenticate via Google OAuth.
+ * If no owner exists yet, this Google account becomes the sole permanent owner.
+ * If an owner already exists, only that specific Google account can sign in; any other is immediately rejected.
+ */
+export async function authenticateWithGoogle(): Promise<{ user: AuthOwnerUser; lock: SingleUserLock }> {
+  if (!auth) {
+    throw new Error("Authentication service is unavailable.");
+  }
+
+  const currentLock = await getSingleUserLock();
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
+  let userCred;
+  try {
+    userCred = await signInWithPopup(auth, provider);
+  } catch (popupErr: any) {
+    if (popupErr?.code === 'auth/popup-blocked') {
+      throw new Error("Google Sign-In popup was blocked by your browser. Please allow popups or use Email/Password.");
+    }
+    if (popupErr?.code === 'auth/cancelled-popup-request' || popupErr?.code === 'auth/popup-closed-by-user') {
+      throw new Error("Authentication cancelled by user.");
+    }
+    throw popupErr;
+  }
+
+  const fbUser = userCred.user;
+  const userEmail = (fbUser.email || '').toLowerCase().trim();
+
+  // Case A: System already has an initialized owner
+  if (currentLock.isInitialized) {
+    const isAuthorized = 
+      fbUser.uid === currentLock.ownerUid || 
+      userEmail === currentLock.ownerEmail.toLowerCase().trim();
+
+    if (!isAuthorized) {
+      await signOut(auth);
+      throw new Error(
+        "Don't try to Enter this, You're not an OWNER"
+      );
+    }
+
+    // Update last login
+    const updatedLock: SingleUserLock = {
+      ...currentLock,
+      lastLoginAt: new Date().toISOString()
+    };
+    inMemoryLockCache = updatedLock;
+
+    try {
+      localStorage.setItem('barozza_single_user_lock', JSON.stringify(updatedLock));
+      localStorage.setItem('barozza_auth_session', JSON.stringify({
+        uid: fbUser.uid,
+        email: userEmail,
+        displayName: currentLock.ownerName,
+        photoURL: fbUser.photoURL || undefined,
+        provider: 'google'
+      }));
+    } catch (e) {}
+
+    if (firestoreDb) {
+      setDoc(doc(firestoreDb, 'system_security', 'single_user_lock'), {
+        lastLoginAt: updatedLock.lastLoginAt
+      }, { merge: true }).catch(() => {});
+    }
+
+    const authUser: AuthOwnerUser = {
+      uid: fbUser.uid,
+      email: userEmail,
+      displayName: currentLock.ownerName,
+      photoURL: fbUser.photoURL || undefined,
+      provider: 'google'
+    };
+
+    return { user: authUser, lock: updatedLock };
+  }
+
+  // Case B: First user claim! This Google user becomes the permanent single owner.
+  const displayName = fbUser.displayName || 'Platform Owner';
+  const nameParts = displayName.trim().split(' ');
+  const firstName = nameParts[0] || 'Platform';
+  const lastName = nameParts.slice(1).join(' ') || 'Owner';
+
+  const newLock: SingleUserLock = {
+    isInitialized: true,
+    ownerUid: fbUser.uid,
+    ownerEmail: userEmail,
+    ownerName: displayName,
+    ownerFirstName: firstName,
+    ownerLastName: lastName,
+    authProvider: 'google',
+    registeredAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString()
+  };
+
+  if (firestoreDb) {
+    try {
+      const lockDocRef = doc(firestoreDb, 'system_security', 'single_user_lock');
+      await setDoc(lockDocRef, newLock, { merge: true });
+    } catch (e) {
+      console.warn("Could not save initial Google lock to Firestore:", e);
+    }
+  }
+
+  try {
+    localStorage.setItem('barozza_single_user_lock', JSON.stringify(newLock));
+    localStorage.setItem('barozza_auth_session', JSON.stringify({
+      uid: fbUser.uid,
+      email: userEmail,
+      displayName,
+      photoURL: fbUser.photoURL || undefined,
+      provider: 'google'
+    }));
+    window.dispatchEvent(new CustomEvent('barozza_lock_updated', { detail: newLock }));
+  } catch (e) {}
+
+  const authUser: AuthOwnerUser = {
+    uid: fbUser.uid,
+    email: userEmail,
+    displayName,
+    firstName,
+    lastName,
+    photoURL: fbUser.photoURL || undefined,
+    provider: 'google'
+  };
+
+  return { user: authUser, lock: newLock };
+}
+
+/**
+ * Log out the system owner and clear session state
+ */
+export async function logOutOwner(): Promise<void> {
+  if (auth) {
+    try {
+      await signOut(auth);
+    } catch (e) {}
+  }
+  try {
+    localStorage.removeItem('barozza_auth_session');
+    window.dispatchEvent(new CustomEvent('barozza_auth_logout'));
+  } catch (e) {}
+}
+
+/**
+ * Synchronous retrieval of cached active owner session
+ */
+export function getCachedOwnerSession(): AuthOwnerUser | null {
+  try {
+    const raw = localStorage.getItem('barozza_auth_session');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.uid && parsed.email) {
+        return parsed as AuthOwnerUser;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
 
 

@@ -7,6 +7,7 @@ interface EditProductModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (productData: Partial<Product>) => void;
+  onDelete?: (productId: string) => void;
   availableCategories?: string[];
 }
 
@@ -15,6 +16,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onDelete,
   availableCategories = []
 }) => {
   const isEditing = !!product;
@@ -64,7 +66,32 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     reader.onload = (e) => {
       const result = e.target?.result as string;
       if (result) {
-        setImageUrl(result);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 500;
+          if (width > height && width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            setImageUrl(compressedDataUrl);
+          } else {
+            setImageUrl(result);
+          }
+        };
+        img.onerror = () => setImageUrl(result);
+        img.src = result;
       }
     };
     reader.readAsDataURL(file);
@@ -109,9 +136,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-200">
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/75 backdrop-blur-xs">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[94vh] overflow-hidden flex flex-col shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-200">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
               <Package className="w-5 h-5" />
@@ -131,7 +158,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4 text-xs">
           <div>
             <label className="text-slate-400 block mb-1">Product Title</label>
             <input
@@ -338,21 +365,37 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition"
-            >
-              <Save className="w-3.5 h-3.5" />
-              <span>{isEditing ? 'Save Changes' : 'Create Product'}</span>
-            </button>
+          <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+            {isEditing && product ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDelete) onDelete(product.id);
+                  onClose();
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-bold transition cursor-pointer active:scale-95"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Dish</span>
+              </button>
+            ) : <div />}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isEditing ? 'Save Changes' : 'Create Product'}</span>
+              </button>
+            </div>
           </div>
         </form>
       </div>

@@ -10,12 +10,21 @@ import {
   deleteOrderDocument,
   listenToMenuCatalog,
   syncDishesToFirestoreAndStore,
+  deleteDishFromFirestoreCatalog,
   realtimeDb,
   normalizeOrderData,
   getInitialCafeStatus,
   syncCafeStatusToFirebaseAndStore,
-  listenToCafeStatus
+  listenToCafeStatus,
+  AuthOwnerUser,
+  SingleUserLock,
+  getCachedOwnerSession,
+  logOutOwner,
+  auth,
+  getSingleUserLock,
+  subscribeToSingleUserLock
 } from './services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Order, OrderStatus, Product, SupportTicket, SyncLog, ApiSyncConfig, TicketStatus, TicketPriority, CafeStatus } from './types';
 import { 
   INITIAL_ORDERS, 
@@ -39,9 +48,15 @@ import { CreateOrderModal } from './components/CreateOrderModal';
 import { FirebaseDiagnosticModal } from './components/FirebaseDiagnosticModal';
 import { EditProductModal } from './components/EditProductModal';
 import { CafeStatusModal } from './components/CafeStatusModal';
-import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
+import { AuthGateway } from './components/AuthGateway';
+import { CheckCircle2, AlertTriangle, Info, X, Home, Utensils, BarChart3, Store } from 'lucide-react';
 
 export default function App() {
+  // Single-User Owner Authentication State
+  const [currentUser, setCurrentUser] = useState<AuthOwnerUser | null>(() => getCachedOwnerSession());
+  const [ownerLock, setOwnerLock] = useState<SingleUserLock | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+
   // Navigation
   const [activeTab, setActiveTab] = useState<'orders' | 'analytics' | 'inventory' | 'support' | 'api-sync' | 'customer'>('orders');
   const [isMinimized, setIsMinimized] = useState<boolean>(true);
@@ -57,27 +72,104 @@ export default function App() {
   const [cafeStatus, setCafeStatus] = useState<CafeStatus>(getInitialCafeStatus);
   const [isCafeStatusModalOpen, setIsCafeStatusModalOpen] = useState<boolean>(false);
 
+  // Helper to filter out permanently deleted products
+  const filterDeletedProducts = useCallback((prods: Product[]) => {
+    const deletedRegistry = new Set<string>();
+    try {
+      const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => deletedRegistry.add(String(id).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
+    return prods.filter(p => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+      return !deletedRegistry.has(pId) && !deletedRegistry.has(pDishId) && !deletedRegistry.has(pSku) && !deletedRegistry.has(pName);
+    });
+  }, []);
+
   // Core Data States - Starts empty so ONLY authentic customer dashboard parcels are received
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>(() => {
+    let initialList = INITIAL_PRODUCTS;
     try {
       const cached = localStorage.getItem("barozza_admin_products");
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return deduplicateProducts(parsed.map((p: any) => ({
-            ...p,
-            syncedWithExternalStore: true,
-            lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
-          })));
+          initialList = parsed;
         }
       }
     } catch (e) {}
-    return deduplicateProducts(INITIAL_PRODUCTS.map(p => ({
-      ...p,
-      syncedWithExternalStore: true,
-      lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
-    })));
+
+    const deletedRegistry = new Set<string>();
+    try {
+      const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => deletedRegistry.add(String(id).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
+    const ownerZeroSet = new Set<string>();
+    try {
+      const rawZero = localStorage.getItem("barozza_owner_zero_dishes");
+      if (rawZero) {
+        const parsedZero = JSON.parse(rawZero);
+        if (Array.isArray(parsedZero)) {
+          parsedZero.forEach(z => ownerZeroSet.add(String(z).toLowerCase().trim()));
+        }
+      }
+    } catch (e) {}
+
+    const isCafeCurrentlyOpen = getInitialCafeStatus().isOpen;
+
+    const valid = initialList.map((p: any) => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+
+      const isOwnerZero = 
+        ownerZeroSet.has(pId) || 
+        ownerZeroSet.has(pDishId) || 
+        ownerZeroSet.has(pSku) || 
+        ownerZeroSet.has(pName);
+
+      // When cafe is open, default all dishes count to 25 unless owner explicitly setZero on their own
+      let finalStock = p.stock;
+      if (isCafeCurrentlyOpen) {
+        if (isOwnerZero) {
+          finalStock = 0;
+        } else if (finalStock === undefined || finalStock === null || finalStock === 0) {
+          finalStock = 25;
+        }
+      }
+
+      return {
+        ...p,
+        stock: finalStock,
+        status: (finalStock === 0 ? 'out_of_stock' : finalStock <= (p.lowStockThreshold || 5) ? 'low_stock' : 'in_stock') as Product['status'],
+        syncedWithExternalStore: true,
+        lastSyncedAt: p.lastSyncedAt || new Date().toISOString()
+      };
+    }).filter(p => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+      return !deletedRegistry.has(pId) && !deletedRegistry.has(pDishId) && !deletedRegistry.has(pSku) && !deletedRegistry.has(pName);
+    });
+
+    return deduplicateProducts(valid.length > 0 ? valid : INITIAL_PRODUCTS);
   });
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
@@ -136,6 +228,91 @@ export default function App() {
     setTimeout(() => {
       setToast(null);
     }, 4500);
+  };
+
+  // Synchronize Single-User Lock & Authentication Session
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Initial lock retrieval
+    getSingleUserLock().then((lock) => {
+      if (isMounted) setOwnerLock(lock);
+    }).catch(() => {});
+
+    // 2. Real-time subscription to single-user lock status
+    const unsubLock = subscribeToSingleUserLock((updatedLock) => {
+      if (isMounted) setOwnerLock(updatedLock);
+    });
+
+    // 3. Firebase Auth listener
+    let unsubAuth = () => {};
+    if (auth) {
+      unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+        if (!isMounted) return;
+        if (fbUser) {
+          const currentLock = await getSingleUserLock();
+          if (isMounted) setOwnerLock(currentLock);
+
+          if (currentLock.isInitialized) {
+            const userEmail = (fbUser.email || '').toLowerCase().trim();
+            const isOwner = 
+              fbUser.uid === currentLock.ownerUid || 
+              userEmail === currentLock.ownerEmail.toLowerCase().trim();
+
+            if (isOwner) {
+              const authUser: AuthOwnerUser = {
+                uid: fbUser.uid,
+                email: userEmail,
+                displayName: currentLock.ownerName || fbUser.displayName || 'System Owner',
+                firstName: currentLock.ownerFirstName,
+                lastName: currentLock.ownerLastName,
+                photoURL: fbUser.photoURL || undefined,
+                provider: (fbUser.providerData[0]?.providerId === 'google.com' ? 'google' : 'password') as 'password' | 'google'
+              };
+              setCurrentUser(authUser);
+            } else {
+              // Non-owner account -> eject immediately per strict single-user policy
+              await logOutOwner();
+              setCurrentUser(null);
+              showToast("Access Denied", "Don't try to Enter this, You're not an OWNER", "error");
+            }
+          }
+        } else {
+          // If no active Firebase Auth session, check if a cached session exists
+          const cached = getCachedOwnerSession();
+          if (!cached) {
+            setCurrentUser(null);
+          }
+        }
+        if (isMounted) setIsAuthLoading(false);
+      });
+    } else {
+      if (isMounted) setIsAuthLoading(false);
+    }
+
+    const handleLogoutEvt = () => {
+      if (isMounted) setCurrentUser(null);
+    };
+    window.addEventListener('barozza_auth_logout', handleLogoutEvt);
+
+    return () => {
+      isMounted = false;
+      unsubLock();
+      unsubAuth();
+      window.removeEventListener('barozza_auth_logout', handleLogoutEvt);
+    };
+  }, []);
+
+  const handleAuthenticated = (user: AuthOwnerUser, lock: SingleUserLock) => {
+    setCurrentUser(user);
+    setOwnerLock(lock);
+    showToast("Session Authorized", `Welcome, ${user.displayName || 'System Owner'}`, "success");
+  };
+
+  const handleLogOut = async () => {
+    await logOutOwner();
+    setCurrentUser(null);
+    showToast("Session Locked", "System owner session securely closed.", "info");
   };
 
   // Ref to track known order IDs to prevent repeat chimes
@@ -300,8 +477,9 @@ export default function App() {
       // 3. Realtime listener for dishes / menu catalog
       const unsubscribeCatalog = listenToMenuCatalog((catalogDishes) => {
         if (catalogDishes && catalogDishes.length > 0) {
+          const filteredCatalog = filterDeletedProducts(catalogDishes);
           setProducts(prev => {
-            const merged = deduplicateProducts([...catalogDishes, ...prev]);
+            const merged = filterDeletedProducts(deduplicateProducts([...filteredCatalog, ...prev]));
             try {
               localStorage.setItem("barozza_admin_products", JSON.stringify(merged));
             } catch (e) {}
@@ -362,7 +540,34 @@ export default function App() {
   // Listen to Cafe Status changes in real-time (across Firestore, BroadcastChannel, localStorage)
   useEffect(() => {
     const unsubscribe = listenToCafeStatus((updatedStatus) => {
-      setCafeStatus(updatedStatus);
+      setCafeStatus(prevStatus => {
+        // If cafe transitioned from closed -> open
+        if (!prevStatus.isOpen && updatedStatus.isOpen) {
+          try {
+            localStorage.removeItem('barozza_owner_zero_dishes');
+          } catch (e) {}
+
+          setProducts(prevProducts => {
+            const resetProducts = prevProducts.map(p => ({
+              ...p,
+              stock: 25,
+              status: 'in_stock' as const,
+              available: true,
+              cafeClosed: false,
+              lastSyncedAt: new Date().toISOString()
+            }));
+
+            try {
+              localStorage.setItem("barozza_admin_products", JSON.stringify(resetProducts));
+              window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { newStock: 25, products: resetProducts } }));
+            } catch (e) {}
+
+            syncDishesToFirestoreAndStore(resetProducts).catch(() => {});
+            return resetProducts;
+          });
+        }
+        return updatedStatus;
+      });
     });
     return unsubscribe;
   }, []);
@@ -380,11 +585,33 @@ export default function App() {
             formattedReopenTime: '',
             closedBy: 'The Admin ( Rohit ) System Auto-Reopen'
           };
-          syncCafeStatusToFirebaseAndStore(autoReopened, products);
+
+          try {
+            localStorage.removeItem('barozza_owner_zero_dishes');
+          } catch (e) {}
+
+          const resetProducts = products.map(p => ({
+            ...p,
+            stock: 25,
+            status: 'in_stock' as const,
+            available: true,
+            cafeClosed: false,
+            lastSyncedAt: new Date().toISOString()
+          }));
+          setProducts(resetProducts);
+
+          try {
+            localStorage.setItem("barozza_admin_products", JSON.stringify(resetProducts));
+            window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { newStock: 25, products: resetProducts } }));
+          } catch (e) {}
+
+          syncDishesToFirestoreAndStore(resetProducts).catch(() => {});
+          syncCafeStatusToFirebaseAndStore(autoReopened, resetProducts);
           setCafeStatus(autoReopened);
+
           showToast(
             "Cafe Auto-Reopened!",
-            "Scheduled opening time reached. Customer storefront is open and full color is restored.",
+            "Scheduled opening time reached. Customer storefront is open with all dishes count set to 25 by default.",
             "success"
           );
         }
@@ -396,20 +623,59 @@ export default function App() {
     return () => clearInterval(interval);
   }, [cafeStatus, products]);
 
-  // Update Cafe Status from Admin Dashboard
+  // Update Cafe Status from Admin Dashboard (Instant zero-delay update)
   const handleUpdateCafeStatus = async (newStatus: CafeStatus) => {
-    await syncCafeStatusToFirebaseAndStore(newStatus, products);
+    // 1. Instant local state update in 0ms
     setCafeStatus(newStatus);
+
+    let prodsToSync = products;
+
+    if (newStatus.isOpen) {
+      // "when the cafe is open then by default set all the dishes count 25 already till the owner setZero on its own. for every open of cafe"
+      try {
+        localStorage.removeItem('barozza_owner_zero_dishes');
+      } catch (e) {}
+
+      const resetProducts = products.map(p => ({
+        ...p,
+        stock: 25,
+        status: 'in_stock' as const,
+        available: true,
+        cafeClosed: false,
+        lastSyncedAt: new Date().toISOString()
+      }));
+      setProducts(resetProducts);
+      prodsToSync = resetProducts;
+
+      try {
+        localStorage.setItem("barozza_admin_products", JSON.stringify(resetProducts));
+        window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { newStock: 25, products: resetProducts } }));
+      } catch (e) {}
+
+      syncDishesToFirestoreAndStore(resetProducts).catch(() => {});
+    }
+
+    // 2. Instant localStorage & DOM event dispatch for 0ms multi-context reaction
+    try {
+      localStorage.setItem('barozza_cafe_status', JSON.stringify(newStatus));
+      window.dispatchEvent(new CustomEvent('barozza_cafe_status_change', { detail: newStatus }));
+    } catch (e) {}
+
+    // 3. Cloud synchronization in background (Firestore & RTDB)
+    syncCafeStatusToFirebaseAndStore(newStatus, prodsToSync).catch(err => {
+      console.warn("Background cafe status sync error:", err);
+    });
+
     if (!newStatus.isOpen) {
       showToast(
-        "Cafe Closed Successfully",
+        "Cafe Closed Instantly",
         `Orders locked and customer storefront set to B&W. Opens at ${newStatus.formattedReopenTime}.`,
         "info"
       );
     } else {
       showToast(
-        "Cafe Reopened",
-        "Feature turned off. Customer storefront is back to full color and accepting orders.",
+        "Cafe Reopened (All Dishes Count: 25)",
+        "Cafe is open! All dishes are set to 25 count by default till you set any dish to zero.",
         "success"
       );
     }
@@ -561,8 +827,24 @@ export default function App() {
   const handleUpdateStock = (productId: string, newStock: number) => {
     let updatedProduct: Product | undefined;
 
+    // Track owner zero choice: if newStock is 0, add to barozza_owner_zero_dishes, otherwise remove
+    try {
+      let zeroList: string[] = [];
+      const savedZero = localStorage.getItem('barozza_owner_zero_dishes');
+      if (savedZero) {
+        const parsed = JSON.parse(savedZero);
+        if (Array.isArray(parsed)) zeroList = parsed;
+      }
+      if (newStock === 0) {
+        if (!zeroList.includes(productId)) zeroList.push(productId);
+      } else {
+        zeroList = zeroList.filter(z => z !== productId);
+      }
+      localStorage.setItem('barozza_owner_zero_dishes', JSON.stringify(zeroList));
+    } catch (e) {}
+
     const updatedList = products.map(p => {
-      if (p.id === productId) {
+      if (p.id === productId || p.dishId === productId || p.sku === productId || String(p.id) === String(productId)) {
         updatedProduct = {
           ...p,
           stock: newStock,
@@ -575,14 +857,21 @@ export default function App() {
     });
 
     setProducts(updatedList);
-    syncDishesToFirestoreAndStore(updatedList);
+    try {
+      localStorage.setItem("barozza_admin_products", JSON.stringify(updatedList));
+      window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { productId, newStock, products: updatedList } }));
+    } catch (e) {}
+
+    syncDishesToFirestoreAndStore(updatedList).catch(() => {});
 
     if (updatedProduct) {
-      setToast({
-        title: 'Quantity Updated (Live Sync)',
-        message: `${updatedProduct.name}: ${newStock} units available. Live changes synced to ${apiConfig.partnerStoreUrl}`,
-        type: 'success'
-      });
+      showToast(
+        newStock === 0 ? 'Marked Sold Out (0 units)' : 'Quantity Updated (Live Sync)',
+        newStock === 0
+          ? `${updatedProduct.name}: Set to 0 units (Sold out on customer storefront till restocked).`
+          : `${updatedProduct.name}: ${newStock} units available. Live changes synced to customer dashboard.`,
+        newStock === 0 ? 'info' : 'success'
+      );
 
       if (apiConfig.autoSyncStock) {
         setSyncLogs(prev => [
@@ -600,6 +889,41 @@ export default function App() {
         ]);
       }
     }
+  };
+
+  // Bulk Stock update (e.g. Set All Dishes to 0 or Reset All Dishes to 25)
+  const handleSetAllDishesStock = (targetStock: number) => {
+    try {
+      if (targetStock === 0) {
+        const allIds = products.map(p => p.id);
+        localStorage.setItem('barozza_owner_zero_dishes', JSON.stringify(allIds));
+      } else {
+        localStorage.removeItem('barozza_owner_zero_dishes');
+      }
+    } catch (e) {}
+
+    const updatedList = products.map(p => ({
+      ...p,
+      stock: targetStock,
+      status: (targetStock === 0 ? 'out_of_stock' : targetStock <= p.lowStockThreshold ? 'low_stock' : 'in_stock') as Product['status'],
+      lastSyncedAt: new Date().toISOString()
+    }));
+
+    setProducts(updatedList);
+    try {
+      localStorage.setItem("barozza_admin_products", JSON.stringify(updatedList));
+      window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { newStock: targetStock, products: updatedList } }));
+    } catch (e) {}
+
+    syncDishesToFirestoreAndStore(updatedList).catch(() => {});
+
+    showToast(
+      targetStock === 0 ? "Owner Set All Zero" : `All Dishes Reset to ${targetStock}`,
+      targetStock === 0
+        ? "All dishes set to 0 (Sold Out). Will stay at 0 till you restock or next cafe open."
+        : `All dishes count set to default ${targetStock} units.`,
+      targetStock === 0 ? "info" : "success"
+    );
   };
 
   // Save dish / product from modal
@@ -658,6 +982,108 @@ export default function App() {
         statusCode: 200,
         details: `Synced dish [${productData.name}] (₹${productData.price}) with ${apiConfig.partnerStoreUrl} and Firestore`,
         payload: { name: productData.name, price: productData.price, category: productData.category, syncedWithCustomerSite: true }
+      },
+      ...prev
+    ]);
+  };
+
+  // Delete dish from catalog & live store permanently
+  const handleDeleteProduct = async (productId: string) => {
+    const targetProduct = products.find(p => 
+      p.id === productId || 
+      p.dishId === productId || 
+      p.sku === productId ||
+      String(p.id).toLowerCase() === String(productId).toLowerCase()
+    );
+
+    const targetId = targetProduct?.id || productId;
+    const targetDishId = targetProduct?.dishId;
+    const targetSku = targetProduct?.sku;
+    const targetName = targetProduct?.name?.trim().toLowerCase();
+
+    // 1. Permanently register deleted dish identifiers so it NEVER resurrects in any tab or catalog
+    try {
+      const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+      const deletedRegistry = new Set<string>();
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => deletedRegistry.add(String(id).toLowerCase().trim()));
+        }
+      }
+      deletedRegistry.add(String(productId).toLowerCase().trim());
+      if (targetId) deletedRegistry.add(String(targetId).toLowerCase().trim());
+      if (targetDishId) deletedRegistry.add(String(targetDishId).toLowerCase().trim());
+      if (targetSku) deletedRegistry.add(String(targetSku).toLowerCase().trim());
+      if (targetName) deletedRegistry.add(targetName);
+
+      localStorage.setItem("barozza_deleted_dish_ids", JSON.stringify(Array.from(deletedRegistry)));
+    } catch (e) {}
+
+    // 2. Filter out of local products list immediately
+    const updatedProducts = products.filter(p => {
+      const pId = String(p.id || '').toLowerCase().trim();
+      const pDishId = String(p.dishId || '').toLowerCase().trim();
+      const pSku = String(p.sku || '').toLowerCase().trim();
+      const pName = String(p.name || '').toLowerCase().trim();
+
+      const matchTarget = 
+        p.id === productId ||
+        p.dishId === productId ||
+        p.sku === productId ||
+        (targetId && pId === String(targetId).toLowerCase().trim()) ||
+        (targetDishId && pDishId === String(targetDishId).toLowerCase().trim()) ||
+        (targetSku && pSku === String(targetSku).toLowerCase().trim()) ||
+        (targetName && pName === targetName);
+
+      return !matchTarget;
+    });
+
+    setProducts(updatedProducts);
+    try {
+      localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+    } catch (e) {}
+
+    // 3. Immediately broadcast deletion event to customer storefront
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc1 = new BroadcastChannel("barozza_cafe_dishes");
+        bc1.postMessage({ type: 'DISHES_UPDATED', dishes: updatedProducts, deletedDishId: productId });
+        setTimeout(() => { try { bc1.close(); } catch (e) {} }, 2000);
+
+        const bc2 = new BroadcastChannel("barozza_menu_sync");
+        bc2.postMessage({ type: 'DISHES_UPDATED', dishes: updatedProducts, deletedDishId: productId });
+        setTimeout(() => { try { bc2.close(); } catch (e) {} }, 2000);
+      }
+      window.dispatchEvent(new CustomEvent('barozza_dish_deleted', { detail: { productId, targetProduct } }));
+      window.postMessage({ type: 'BAROZZA_DISH_DELETED', productId, targetProduct }, '*');
+    } catch (e) {}
+
+    // 4. Permanently delete from Firestore catalog and dishes collection
+    try {
+      if (targetProduct) {
+        await deleteDishFromFirestoreCatalog(targetProduct);
+      } else {
+        await deleteDishFromFirestoreCatalog({ id: productId, name: productId } as any);
+      }
+    } catch (e) {
+      console.warn("Firestore permanent dish delete error:", e);
+    }
+
+    await syncDishesToFirestoreAndStore(updatedProducts);
+
+    showToast("Dish Permanently Deleted", `"${targetProduct?.name || 'Dish'}" has been permanently removed from the database and customer storefront.`, "success");
+
+    setSyncLogs(prev => [
+      {
+        id: `log_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        type: 'stock.push',
+        source: 'Admin Catalog Management',
+        status: 'success',
+        statusCode: 200,
+        details: `Permanently deleted dish [${targetProduct?.name || productId}] from database & synced with storefront`,
+        payload: { deletedProductId: productId, sku: targetProduct?.sku }
       },
       ...prev
     ]);
@@ -975,8 +1401,17 @@ export default function App() {
   const openTicketsCount = tickets.filter(t => t.status === 'open' || t.status === 'in_progress').length;
   const lowStockCount = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold).length;
 
+  // Render Single-User Authentication Gateway if no active owner session
+  if (!currentUser) {
+    return (
+      <div className="animate-in fade-in duration-300">
+        <AuthGateway onAuthenticated={handleAuthenticated} isDarkMode={isDarkMode} />
+      </div>
+    );
+  }
+
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-[#0a0f1d] text-slate-100' : 'bg-white text-slate-900'} flex font-sans selection:bg-indigo-500 selection:text-white`}>
+    <div className={`min-h-screen ${isDarkMode ? 'bg-[#0a0f1d] text-slate-100' : 'bg-white text-slate-900'} flex font-sans selection:bg-indigo-500 selection:text-white animate-in fade-in duration-300`}>
       {/* Minimized / Adjustable Vertical Sidebar (dockable Left or Right, manually resizable by admin) */}
       <Sidebar
         activeTab={activeTab}
@@ -1009,10 +1444,12 @@ export default function App() {
           cafeStatus={cafeStatus}
           onOpenCafeStatusModal={() => setIsCafeStatusModalOpen(true)}
           onReopenCafeEarly={handleReopenCafeEarly}
+          authenticatedOwner={currentUser}
+          onLogOut={handleLogOut}
         />
 
         {/* Main Content Area */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-6">
           {activeTab === 'orders' && (
             <OrdersView
               orders={orders}
@@ -1039,6 +1476,7 @@ export default function App() {
             onOpenAdminCafeModal={() => setIsCafeStatusModalOpen(true)}
             onReopenCafeEarly={handleReopenCafeEarly}
             onUpdateCafeStatus={handleUpdateCafeStatus}
+            onUpdateStock={handleUpdateStock}
           />
         )}
 
@@ -1055,6 +1493,8 @@ export default function App() {
             products={products}
             orders={orders}
             onUpdateStock={handleUpdateStock}
+            onSetAllStock={handleSetAllDishesStock}
+            onDeleteProduct={handleDeleteProduct}
             onOpenEditModal={(prod) => {
               setEditingProduct(prod);
               setIsEditProductModalOpen(true);
@@ -1093,6 +1533,78 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Mobile Bottom Navigation Bar (Visible only on phone/mobile screens < md) */}
+      <nav 
+        aria-label="Mobile Navigation"
+        className={`md:hidden fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl px-2 py-2 flex items-center justify-around transition-colors shadow-2xl safe-area-inset-bottom ${
+          isDarkMode 
+            ? 'bg-[#0a0f1d]/95 border-slate-800 text-slate-400 shadow-black/80' 
+            : 'bg-white/95 border-slate-200 text-slate-500 shadow-slate-300/60'
+        }`}
+      >
+        <button
+          onClick={() => setActiveTab('orders')}
+          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition-all cursor-pointer relative min-h-[44px] ${
+            activeTab === 'orders' 
+              ? (isDarkMode ? 'text-indigo-400 font-bold' : 'text-indigo-600 font-bold') 
+              : 'hover:text-slate-200'
+          }`}
+        >
+          <div className="relative flex items-center justify-center">
+            <Home className="w-5 h-5" />
+            {orders.length > 0 && (
+              <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center font-mono shadow-xs">
+                {orders.length}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] mt-1 font-medium tracking-tight">Parcels</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('inventory')}
+          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition-all cursor-pointer relative min-h-[44px] ${
+            activeTab === 'inventory' 
+              ? (isDarkMode ? 'text-indigo-400 font-bold' : 'text-indigo-600 font-bold') 
+              : 'hover:text-slate-200'
+          }`}
+        >
+          <div className="relative flex items-center justify-center">
+            <Utensils className="w-5 h-5" />
+            {lowStockCount > 0 && (
+              <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-black text-[9px] font-bold flex items-center justify-center font-mono shadow-xs">
+                {lowStockCount}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] mt-1 font-medium tracking-tight">Menu & Stock</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition-all cursor-pointer relative min-h-[44px] ${
+            activeTab === 'analytics' 
+              ? (isDarkMode ? 'text-indigo-400 font-bold' : 'text-indigo-600 font-bold') 
+              : 'hover:text-slate-200'
+          }`}
+        >
+          <BarChart3 className="w-5 h-5" />
+          <span className="text-[10px] mt-1 font-medium tracking-tight">Analytics</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('customer')}
+          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition-all cursor-pointer relative min-h-[44px] ${
+            activeTab === 'customer' 
+              ? (isDarkMode ? 'text-indigo-400 font-bold' : 'text-indigo-600 font-bold') 
+              : 'hover:text-slate-200'
+          }`}
+        >
+          <Store className="w-5 h-5" />
+          <span className="text-[10px] mt-1 font-medium tracking-tight">Storefront</span>
+        </button>
+      </nav>
 
       {/* Modals */}
       {/* 1. Order Details Modal */}
@@ -1144,6 +1656,7 @@ export default function App() {
             setEditingProduct(null);
           }}
           onSave={handleSaveProduct}
+          onDelete={handleDeleteProduct}
         />
       )}
 
