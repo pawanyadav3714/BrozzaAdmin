@@ -39,7 +39,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
   // Form Fields
   const [firstName, setFirstName] = useState<string>('');
   const [lastName, setLastName] = useState<string>('');
-  const [email, setEmail] = useState<string>('pawanyadav3714@gmail.com');
+  const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
 
   // UI state
@@ -97,7 +97,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
     setSuccessMessage(null);
 
     if (lock?.isInitialized) {
-      setErrorMessage("Registration is closed. System initialized.");
+      setErrorMessage("You're not an owner !! 💀");
       return;
     }
 
@@ -147,7 +147,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       console.error("Owner registration error:", err);
       const raw = err?.message || "";
       if (raw.includes("closed") || raw.includes("initialized") || raw.includes("OWNER")) {
-        setErrorMessage("Registration is closed. System initialized.");
+        setErrorMessage("You're not an owner !! 💀");
       } else {
         setErrorMessage(raw || "Failed to initialize ownership. Please check your credentials.");
       }
@@ -202,9 +202,9 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
         raw.includes("wrong-password") ||
         raw.includes("invalid-credential")
       ) {
-        setErrorMessage("Registration is closed. System initialized.");
+        setErrorMessage("You're not an owner !! 💀");
       } else {
-        setErrorMessage(raw || "Registration is closed. System initialized.");
+        setErrorMessage(raw || "You're not an owner !! 💀");
       }
     } finally {
       setIsSubmitting(false);
@@ -242,7 +242,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       } else if (raw.includes("cancelled") || raw.includes("closed-by-user")) {
         setErrorMessage("Authentication cancelled by user.");
       } else {
-        setErrorMessage("Registration is closed. System initialized.");
+        setErrorMessage("You're not an owner !! 💀");
       }
     } finally {
       setIsSubmitting(false);
@@ -377,6 +377,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                   <input
                     type="email"
                     required
+                    autoComplete="off"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="e.g., alex.turner@company.com"
@@ -490,6 +491,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                   <input
                     type="email"
                     required
+                    autoComplete="off"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="e.g., alex.turner@company.com"
@@ -572,7 +574,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                   type="button"
                   onClick={() => {
                     if (isInitialized) {
-                      setErrorMessage("Registration is closed. System initialized.");
+                      setErrorMessage("You're not an owner !! 💀");
                     } else {
                       setActiveMode('signup');
                       setErrorMessage(null);
