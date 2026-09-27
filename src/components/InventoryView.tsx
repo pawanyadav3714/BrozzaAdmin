@@ -113,17 +113,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // Filtered products
   const filteredProducts = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
     return products.filter(p => {
-      const matchesSearch = 
-        p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.sku.toLowerCase().includes(searchTerm.toLowerCase());
+      const pName = String(p.name || '').toLowerCase();
+      const pSku = String(p.sku || '').toLowerCase();
+      const matchesSearch = !term || pName.includes(term) || pSku.includes(term);
       const matchesCat = categoryFilter === 'all' || p.category === categoryFilter;
-      const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+      const itemStatus = p.status || (p.stock === 0 ? 'out_of_stock' : p.stock <= (p.lowStockThreshold || 5) ? 'low_stock' : 'in_stock');
+      const matchesStatus = statusFilter === 'all' || itemStatus === statusFilter;
       return matchesSearch && matchesCat && matchesStatus;
     });
   }, [products, searchTerm, categoryFilter, statusFilter]);
 
-  const lowStockItems = products.filter(p => p.status === 'low_stock' || p.stock <= p.lowStockThreshold);
+  const lowStockItems = products.filter(p => (p.status === 'low_stock' || p.stock <= (p.lowStockThreshold || 5)) && p.stock > 0);
   const outOfStockItems = products.filter(p => p.stock === 0 || p.status === 'out_of_stock');
 
   const handleStartEditPrice = (prod: Product) => {
@@ -205,9 +207,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
           <button
             onClick={() => onOpenEditModal(null)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow transition cursor-pointer shrink-0"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-indigo-600 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold text-xs shadow-lg shadow-indigo-500/25 border border-indigo-400/40 transition-all duration-200 cursor-pointer shrink-0 active:scale-95 group"
+            title="Create a new dish to store in database and display on customer dashboard"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <div className="w-4 h-4 rounded-md bg-white/20 flex items-center justify-center group-hover:rotate-90 transition-transform duration-200">
+              <Plus className="w-3.5 h-3.5 text-white" />
+            </div>
             <span>Add Dish</span>
           </button>
         </div>
@@ -244,6 +249,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center text-slate-400">
             <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
             <p className="font-semibold text-slate-300">No dishes match filter</p>
+            <button
+              type="button"
+              onClick={() => onOpenEditModal(null)}
+              className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md cursor-pointer active:scale-95"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add New Dish</span>
+            </button>
           </div>
         ) : (
           filteredProducts.map((prod, idx) => {
@@ -458,7 +471,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-slate-400">
                     <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                    <p className="font-semibold text-slate-300">No products matched filter</p>
+                    <p className="font-semibold text-slate-300">No dishes matched filter</p>
+                    <button
+                      type="button"
+                      onClick={() => onOpenEditModal(null)}
+                      className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md cursor-pointer active:scale-95"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add New Dish</span>
+                    </button>
                   </td>
                 </tr>
               ) : (
@@ -534,6 +555,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                 </span>
                               </div>
                             )}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                Live on Customer Menu
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-500">{prod.sku}</span>
+                            </div>
                             {prod.description && (
                               <div className="text-xs text-slate-400 max-w-[280px] truncate mt-1 leading-snug font-medium" title={prod.description}>
                                 {prod.description}

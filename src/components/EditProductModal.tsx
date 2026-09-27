@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { X, Package, Save, Check, UploadCloud, Trash2, Globe, CheckCircle2, ChevronDown } from 'lucide-react';
+import { X, Package, Save, Check, UploadCloud, Trash2, Globe, CheckCircle2, ChevronDown, AlertTriangle, Loader2 } from 'lucide-react';
 import { Product } from '../types';
 
 interface EditProductModalProps {
@@ -37,31 +37,50 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [stock, setStock] = useState(product?.stock ?? 25);
   const [lowStockThreshold, setLowStockThreshold] = useState(product?.lowStockThreshold ?? 10);
   const [imageUrl, setImageUrl] = useState(product?.imageUrl || '');
+  const [imageFileName, setImageFileName] = useState<string>('');
+  const [imageSizeKb, setImageSizeKb] = useState<number | null>(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [syncedWithExternalStore, setSyncedWithExternalStore] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  // Sync form inputs whenever modal opens or edited product changes
+  // Track initialization to avoid wiping out user typed inputs on background re-renders
+  const initializedKeyRef = useRef<string | null>(null);
+
+  // Sync form inputs only when modal opens or edited product changes (never during user typing)
   useEffect(() => {
     if (isOpen) {
-      const initialCat = product?.category || categoryOptions[0] || 'Starters';
-      setName(product?.name || '');
-      setSku(product?.sku || '');
-      setCategory(initialCat);
-      setIsCustomCategory(!categoryOptions.includes(initialCat));
-      setDescription(product?.description || '');
-      setPrice(product?.price || 40.00);
-      setCostPrice(product?.costPrice || 20.00);
-      setStock(product?.stock ?? 25);
-      setLowStockThreshold(product?.lowStockThreshold ?? 10);
-      setImageUrl(product?.imageUrl || '');
-      setSyncedWithExternalStore(true);
+      const currentTargetKey = product ? `edit_${product.id || product.sku}` : 'add_new';
+      if (initializedKeyRef.current !== currentTargetKey) {
+        initializedKeyRef.current = currentTargetKey;
+        const initialCat = product?.category || 'Starters';
+        setName(product?.name || '');
+        setSku(product?.sku || `BRZ-DISH-${Date.now().toString().slice(-4)}`);
+        setCategory(initialCat);
+        setIsCustomCategory(!categoryOptions.includes(initialCat));
+        setDescription(product?.description || '');
+        setPrice(product?.price || 40.00);
+        setCostPrice(product?.costPrice || 20.00);
+        setStock(product?.stock ?? 25);
+        setLowStockThreshold(product?.lowStockThreshold ?? 10);
+        setImageUrl(product?.imageUrl || '');
+        setImageFileName(product?.imageUrl ? 'Existing dish photo' : '');
+        setImageSizeKb(null);
+        setIsProcessingImage(false);
+        setSyncedWithExternalStore(true);
+        setFormError(null);
+      }
+    } else {
+      initializedKeyRef.current = null;
     }
-  }, [isOpen, product, categoryOptions]);
+  }, [isOpen, product?.id, product?.sku]);
 
   if (!isOpen) return null;
 
   const handleFileSelect = (file: File) => {
     if (!file || !file.type.startsWith('image/')) return;
+    setIsProcessingImage(true);
+    const fname = file.name;
     const reader = new FileReader();
     reader.onload = (e) => {
       const result = e.target?.result as string;
@@ -71,7 +90,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          const maxDim = 500;
+          // Optimize to 400px max dimension for fast database save & crisp retina display
+          const maxDim = 400;
           if (width > height && width > maxDim) {
             height = Math.round((height * maxDim) / width);
             width = maxDim;
@@ -84,13 +104,22 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, width, height);
-            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
+            const approxKb = Math.round((compressedDataUrl.length * 3 / 4) / 1024);
             setImageUrl(compressedDataUrl);
+            setImageFileName(fname);
+            setImageSizeKb(approxKb);
           } else {
             setImageUrl(result);
+            setImageFileName(fname);
           }
+          setIsProcessingImage(false);
         };
-        img.onerror = () => setImageUrl(result);
+        img.onerror = () => {
+          setImageUrl(result);
+          setImageFileName(fname);
+          setIsProcessingImage(false);
+        };
         img.src = result;
       }
     };
@@ -116,19 +145,42 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setFormError("Please enter a valid dish or product name.");
+      return;
+    }
+
+    const numPrice = Number(price);
+    if (isNaN(numPrice) || numPrice < 0) {
+      setFormError("Please enter a valid price in ₹ INR (e.g. 40).");
+      return;
+    }
+
+    const numStock = Number(stock);
+    if (isNaN(numStock) || numStock < 0) {
+      setFormError("Please enter a valid stock quantity (e.g. 25).");
+      return;
+    }
+
+    const finalSku = sku.trim() || `BRZ-DISH-${Date.now().toString().slice(-4)}`;
+    const finalCategory = isCustomCategory ? (category.trim() || 'General') : (category.trim() || 'Starters');
+
     onSave({
       id: product?.id,
       dishId: product?.dishId,
-      name,
-      sku,
-      category,
+      name: trimmedName,
+      sku: finalSku,
+      category: finalCategory,
       description: description.trim() || undefined,
-      price: Number(price),
-      costPrice: Number(costPrice),
-      stock: Number(stock),
-      lowStockThreshold: Number(lowStockThreshold),
-      status: Number(stock) === 0 ? 'out_of_stock' : Number(stock) <= Number(lowStockThreshold) ? 'low_stock' : 'in_stock',
-      syncedWithExternalStore,
+      price: numPrice,
+      costPrice: Number(costPrice) || Math.round(numPrice * 0.5),
+      stock: numStock,
+      lowStockThreshold: Number(lowStockThreshold) || 5,
+      status: numStock === 0 ? 'out_of_stock' : numStock <= Number(lowStockThreshold || 5) ? 'low_stock' : 'in_stock',
+      syncedWithExternalStore: true,
       lastSyncedAt: new Date().toISOString(),
       imageUrl: imageUrl || undefined
     });
@@ -145,9 +197,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-white">
-                {isEditing ? 'Edit Inventory Item' : 'Add New Product to Catalog'}
+                {isEditing ? 'Edit Inventory Item' : 'Add New Dish to Catalog'}
               </h2>
-              <p className="text-xs text-slate-400">Update stock levels & partner store sync attributes</p>
+              <p className="text-xs text-slate-400">Pushes immediately to database & customer storefront</p>
             </div>
           </div>
           <button
@@ -159,28 +211,37 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4 text-xs">
+          {formError && (
+            <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-800/80 text-rose-200 text-xs flex items-center gap-2.5 animate-in fade-in duration-200">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span className="font-semibold">{formError}</span>
+            </div>
+          )}
+
           <div>
-            <label className="text-slate-400 block mb-1">Product Title</label>
+            <label className="text-slate-400 block mb-1">Dish Name / Product Title <span className="text-rose-400">*</span></label>
             <input
               type="text"
               required
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-              placeholder="e.g. Tactile Mechanical Split Keyboard"
+              onChange={(e) => {
+                setName(e.target.value);
+                if (formError) setFormError(null);
+              }}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs"
+              placeholder="e.g. Special Paneer Tikka or Masala Momos"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-slate-400 block mb-1">SKU Code</label>
+              <label className="text-slate-400 block mb-1">SKU Code (Auto-Generated)</label>
               <input
                 type="text"
-                required
                 value={sku}
                 onChange={(e) => setSku(e.target.value.toUpperCase())}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                placeholder="SKU-1001"
+                placeholder="BRZ-DISH-01"
               />
             </div>
             <div>
@@ -272,7 +333,21 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           </div>
 
           <div>
-            <label className="text-slate-400 block mb-1.5 text-xs font-medium">Product Image (Upload from File)</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-slate-300 font-semibold text-xs flex items-center gap-1.5">
+                <span>Dish Picture (Upload from File)</span>
+                <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/60 font-mono">
+                  Database & Customer Sync
+                </span>
+              </label>
+              {imageUrl && (
+                <span className="text-[11px] text-emerald-400 font-mono font-medium flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  {imageSizeKb ? `${imageSizeKb} KB` : 'Attached'}
+                </span>
+              )}
+            </div>
+
             <input
               ref={fileInputRef}
               type="file"
@@ -286,31 +361,48 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             />
 
             {imageUrl ? (
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-700/80 shadow-inner">
-                <img
-                  src={imageUrl}
-                  alt="Product preview"
-                  className="w-14 h-14 rounded-lg object-cover border border-slate-700 bg-slate-900 shrink-0"
-                  referrerPolicy="no-referrer"
-                />
+              <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-slate-950 border border-emerald-500/40 shadow-inner group">
+                <div className="relative shrink-0">
+                  <img
+                    src={imageUrl}
+                    alt="Product preview"
+                    className="w-16 h-16 rounded-xl object-cover border border-emerald-500/60 bg-slate-900 shadow-md group-hover:scale-105 transition-transform"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] shadow">
+                    <Check className="w-3 h-3" />
+                  </div>
+                </div>
+
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-slate-200 truncate">Image file attached</p>
-                  <p className="text-[11px] text-emerald-400 flex items-center gap-1 mt-0.5 font-medium">
-                    <Check className="w-3.5 h-3.5" /> Ready to save
+                  <p className="text-xs font-bold text-white truncate">
+                    {imageFileName || 'Dish Picture Ready'}
+                  </p>
+                  <p className="text-[11px] text-emerald-300 flex items-center gap-1 mt-0.5 font-medium">
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>Stored on Database • Shows on Customer Menu</span>
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Will display across customer storefront cards and live kitchen orders
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium transition cursor-pointer"
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-semibold transition cursor-pointer active:scale-95 border border-slate-700"
                   >
-                    Change File
+                    Change
                   </button>
                   <button
                     type="button"
-                    onClick={() => setImageUrl('')}
-                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition cursor-pointer"
+                    onClick={() => {
+                      setImageUrl('');
+                      setImageFileName('');
+                      setImageSizeKb(null);
+                    }}
+                    className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition cursor-pointer active:scale-90 border border-rose-500/30"
                     title="Remove image"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -323,20 +415,26 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
+                className={`border-2 border-dashed rounded-2xl p-4 sm:p-5 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 relative group ${
                   isDragging
-                    ? 'border-indigo-500 bg-indigo-500/10 scale-[0.99]'
-                    : 'border-slate-700 hover:border-indigo-500/60 bg-slate-950/60 hover:bg-slate-950'
+                    ? 'border-indigo-400 bg-indigo-500/20 scale-[0.99] shadow-lg shadow-indigo-500/20'
+                    : 'border-indigo-500/40 hover:border-indigo-400 bg-slate-950/70 hover:bg-slate-950 shadow-inner'
                 }`}
               >
-                <div className="w-10 h-10 rounded-full bg-slate-800/90 flex items-center justify-center text-slate-300 shadow-inner">
-                  <UploadCloud className="w-5 h-5 text-indigo-400" />
+                <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-sm group-hover:scale-110 group-hover:bg-indigo-600/30 transition-all duration-200">
+                  <UploadCloud className="w-6 h-6 text-indigo-400 animate-pulse" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-slate-200">
-                    <span className="text-indigo-400 font-semibold underline underline-offset-2">Click to choose file</span> or drag & drop here
+                  <p className="text-xs font-semibold text-slate-200">
+                    <span className="text-indigo-400 font-bold underline underline-offset-2">Click to choose dish picture</span> or drag & drop here
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">PNG, JPG, WEBP, GIF, SVG up to 10MB</p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    PNG, JPG, WEBP, GIF up to 10MB • Auto-compressed for fast database storage
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-medium bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-800/60">
+                  <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                  <span>Picture will be stored on database & shown on customer dashboard</span>
                 </div>
               </div>
             )}
@@ -390,10 +488,20 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition"
+                disabled={isProcessingImage}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow transition cursor-pointer active:scale-95"
               >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isEditing ? 'Save Changes' : 'Create Product'}</span>
+                {isProcessingImage ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Compressing Photo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isEditing ? 'Save Changes' : 'Create Product'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

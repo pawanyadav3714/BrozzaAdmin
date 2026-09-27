@@ -616,15 +616,37 @@ export function buildAuthoritativeCustomerDishes(
     }
   } catch (e) {}
 
+  // Active products in the admin inventory must NEVER be suppressed by stale deletedSet entries!
+  const activeKeys = new Set<string>();
+  if (Array.isArray(currentProducts) && currentProducts.length > 0) {
+    currentProducts.forEach(p => {
+      if (p.id) activeKeys.add(String(p.id).toLowerCase().trim());
+      if (p.dishId) activeKeys.add(String(p.dishId).toLowerCase().trim());
+      if (p.sku) activeKeys.add(String(p.sku).toLowerCase().trim());
+      if (p.name) activeKeys.add(String(p.name).toLowerCase().trim());
+    });
+
+    for (const key of activeKeys) {
+      deletedSet.delete(key);
+    }
+
+    try {
+      localStorage.setItem("barozza_deleted_dish_ids", JSON.stringify(Array.from(deletedSet)));
+    } catch (e) {}
+  }
+
   const dishMap = new Map<string, any>();
 
-  // 1. Seed with the 18 canonical dishes required by brozza.vercel.app (excluding deleted ones)
+  // 1. Seed with the 18 canonical dishes required by brozza.vercel.app (excluding only truly deleted ones not present in admin)
   for (const canon of BAROZZA_CANONICAL_DISHES) {
-    if (
-      deletedSet.has(canon.id.toLowerCase()) || 
-      deletedSet.has(canon.name.toLowerCase().trim()) ||
-      deletedSet.has(`brz-dish-${canon.id.padStart(2, '0')}`)
-    ) {
+    const cId = canon.id.toLowerCase().trim();
+    const cName = canon.name.toLowerCase().trim();
+    const cSku = `brz-dish-${canon.id.padStart(2, '0')}`;
+
+    // If canon is active in currentProducts, it is protected
+    const isActiveInAdmin = activeKeys.has(cId) || activeKeys.has(cName) || activeKeys.has(cSku);
+
+    if (!isActiveInAdmin && (deletedSet.has(cId) || deletedSet.has(cName) || deletedSet.has(cSku))) {
       continue;
     }
 
@@ -647,28 +669,19 @@ export function buildAuthoritativeCustomerDishes(
     });
   }
 
-  // 2. Merge current admin products (excluding deleted ones)
+  // 2. Merge all current admin products (source of truth)
   const dedupedAdmin = deduplicateProducts(currentProducts);
   for (const p of dedupedAdmin) {
-    const pId = String(p.id || '').toLowerCase();
-    const pDishId = String(p.dishId || '').toLowerCase();
-    const pSku = String(p.sku || '').toLowerCase();
+    const pId = String(p.id || '').toLowerCase().trim();
+    const pDishId = String(p.dishId || '').toLowerCase().trim();
+    const pSku = String(p.sku || '').toLowerCase().trim();
     const pName = String(p.name || '').toLowerCase().trim();
-
-    if (
-      deletedSet.has(pId) || 
-      deletedSet.has(pDishId) || 
-      deletedSet.has(pSku) || 
-      deletedSet.has(pName)
-    ) {
-      continue;
-    }
 
     // If it corresponds to a canonical dish by dishId or exact name
     const canonMatch = BAROZZA_CANONICAL_DISHES.find(c => 
       c.id === p.dishId || 
       c.id === p.id ||
-      c.name.trim().toLowerCase() === p.name.trim().toLowerCase()
+      c.name.trim().toLowerCase() === pName
     );
 
     if (canonMatch) {
@@ -689,6 +702,9 @@ export function buildAuthoritativeCustomerDishes(
         sku: p.sku || `BRZ-DISH-${canonMatch.id.padStart(2, '0')}`,
         name: dishName, // Respect admin renamed dish name!
         price: Number(p.price) || canonMatch.price,
+        costPrice: (p as any).costPrice || canonMatch.price * 0.5,
+        lowStockThreshold: (p as any).lowStockThreshold || 5,
+        status: p.status || (stockVal === 0 ? 'out_of_stock' : stockVal <= 5 ? 'low_stock' : 'in_stock'),
         image: dishImage, // Respect admin updated image!
         imageUrl: dishImage,
         description: desc,
@@ -717,8 +733,11 @@ export function buildAuthoritativeCustomerDishes(
         sku: p.sku || `BRZ-CUST-${customKey}`,
         name: p.name,
         price: Number(p.price) || 50,
-        image: p.imageUrl || "/images/frenchh.png",
-        imageUrl: p.imageUrl || "/images/frenchh.png",
+        costPrice: (p as any).costPrice || Math.round((Number(p.price) || 50) * 0.5),
+        lowStockThreshold: (p as any).lowStockThreshold || 5,
+        status: p.status || (stockVal === 0 ? 'out_of_stock' : stockVal <= 5 ? 'low_stock' : 'in_stock'),
+        image: p.imageUrl || (p as any).image || "/images/frenchh.png",
+        imageUrl: p.imageUrl || (p as any).image || "/images/frenchh.png",
         description: desc,
         originalDescription: p.description || `${p.name} freshly prepared at The Barozza Cafe.`,
         category: p.category || "General",
@@ -860,7 +879,7 @@ export function buildAuthoritativeCustomerDishes(
       let finalStock = 25;
       if (isOwnerZero) {
         finalStock = 0;
-      } else if (typeof d.stock === 'number' && d.stock > 0) {
+      } else if (typeof d.stock === 'number' && d.stock >= 0) {
         finalStock = d.stock;
       } else {
         finalStock = 25;
@@ -874,6 +893,7 @@ export function buildAuthoritativeCustomerDishes(
         category: d.category || (canon ? canon.category : 'General'),
         available: finalStock > 0,
         stock: finalStock,
+        status: finalStock === 0 ? 'out_of_stock' : finalStock <= 5 ? 'low_stock' : 'in_stock',
         cafeClosed: false,
         description: desc,
         originalDescription: d.originalDescription || canon?.description || desc,
@@ -966,15 +986,16 @@ export async function syncDishesToFirestoreAndStore(products: Product[]): Promis
 
       await Promise.allSettled(
         customerDishes.map(dish => 
-          setDoc(doc(firestoreDb!, 'dishes', dish.id), {
+          setDoc(doc(firestoreDb!, 'dishes', String(dish.dishId || dish.id)), {
             id: dish.id,
-            dishId: dish.id,
+            dishId: dish.dishId || dish.id,
+            sku: dish.sku,
             name: dish.name,
             price: dish.price,
             category: dish.category,
             description: dish.description,
-            image: dish.image,
-            imageUrl: dish.imageUrl,
+            image: dish.image || dish.imageUrl,
+            imageUrl: dish.imageUrl || dish.image,
             available: dish.available,
             stock: dish.stock,
             cafeClosed: !currentStatus.isOpen,
@@ -987,6 +1008,19 @@ export async function syncDishesToFirestoreAndStore(products: Product[]): Promis
     }
   } catch (err) {
     console.warn("Failed to sync dishes catalog to Firestore:", err);
+  }
+
+  // 5. Also sync to Realtime Database (/dishes and /menu_catalog) for instant multi-client reflection
+  if (realtimeDb) {
+    try {
+      await set(ref(realtimeDb, 'dishes'), customerDishes);
+      await set(ref(realtimeDb, 'menu_catalog'), {
+        dishes: customerDishes,
+        lastUpdated: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn("RTDB dishes sync note:", e);
+    }
   }
 }
 
@@ -1735,7 +1769,7 @@ export async function registerFirstOwnerWithEmail(
 
   const currentLock = await getSingleUserLock();
   if (currentLock.isInitialized) {
-    throw new Error("Don't try to Enter this, You're not an OWNER");
+    throw new Error("Registration is closed. System initialized.");
   }
 
   const cleanEmail = data.email.toLowerCase().trim();
@@ -1906,7 +1940,7 @@ export async function authenticateWithGoogle(): Promise<{ user: AuthOwnerUser; l
     if (!isAuthorized) {
       await signOut(auth);
       throw new Error(
-        "Don't try to Enter this, You're not an OWNER"
+        "Registration is closed. System initialized."
       );
     }
 

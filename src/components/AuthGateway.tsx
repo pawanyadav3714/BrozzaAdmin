@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Lock, 
-  Unlock, 
   KeyRound, 
   User, 
   Mail, 
@@ -10,11 +9,11 @@ import {
   EyeOff, 
   CheckCircle2, 
   AlertTriangle, 
-  ArrowRight, 
   Sparkles, 
   Fingerprint, 
   ShieldAlert,
-  Loader2
+  Loader2,
+  Check
 } from 'lucide-react';
 import { 
   SingleUserLock, 
@@ -35,11 +34,12 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
   const [lock, setLock] = useState<SingleUserLock | null>(null);
   const [isLoadingLock, setIsLoadingLock] = useState<boolean>(true);
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [activeMode, setActiveMode] = useState<'signup' | 'signin'>('signin');
 
   // Form Fields
   const [firstName, setFirstName] = useState<string>('');
   const [lastName, setLastName] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
+  const [email, setEmail] = useState<string>('pawanyadav3714@gmail.com');
   const [password, setPassword] = useState<string>('');
 
   // UI state
@@ -55,6 +55,14 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
         if (isMounted) {
           setLock(l);
           setIsLoadingLock(false);
+          if (!l.isInitialized) {
+            setActiveMode('signup');
+          } else {
+            setActiveMode('signin');
+            if (l.ownerEmail) {
+              setEmail(l.ownerEmail);
+            }
+          }
         }
       })
       .catch(() => {
@@ -65,6 +73,14 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       if (isMounted) {
         setLock(updatedLock);
         setIsLoadingLock(false);
+        if (!updatedLock.isInitialized) {
+          setActiveMode('signup');
+        } else {
+          setActiveMode('signin');
+          if (updatedLock.ownerEmail) {
+            setEmail(updatedLock.ownerEmail);
+          }
+        }
       }
     });
 
@@ -79,6 +95,11 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
+
+    if (lock?.isInitialized) {
+      setErrorMessage("Registration is closed. System initialized.");
+      return;
+    }
 
     if (!firstName.trim()) {
       setErrorMessage("Legal first name is required.");
@@ -99,6 +120,19 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
 
     setIsSubmitting(true);
     try {
+      // 1. Also notify backend server
+      fetch('/api/auth/register-owner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim(),
+          password
+        })
+      }).catch(() => {});
+
+      // 2. Client-side single user lock & Firebase Auth
       const res = await registerFirstOwnerWithEmail({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -111,7 +145,12 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       onAuthenticated(res.user, res.lock);
     } catch (err: any) {
       console.error("Owner registration error:", err);
-      setErrorMessage(err?.message || "Failed to initialize ownership. Please check your credentials.");
+      const raw = err?.message || "";
+      if (raw.includes("closed") || raw.includes("initialized") || raw.includes("OWNER")) {
+        setErrorMessage("Registration is closed. System initialized.");
+      } else {
+        setErrorMessage(raw || "Failed to initialize ownership. Please check your credentials.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -134,12 +173,22 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
 
     setIsSubmitting(true);
     try {
+      // Attempt backend session sync
+      fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: email.trim(),
+          password,
+          rememberMe: true
+        })
+      }).catch(() => {});
+
       const res = await loginOwnerWithEmail({
         email: email.trim(),
         password
       });
 
-      // Immediate 0ms login without waiting
       onAuthenticated(res.user, res.lock);
     } catch (err: any) {
       console.error("Owner login error:", err);
@@ -153,9 +202,9 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
         raw.includes("wrong-password") ||
         raw.includes("invalid-credential")
       ) {
-        setErrorMessage("Don't try to Enter this, You're not an OWNER");
+        setErrorMessage("Registration is closed. System initialized.");
       } else {
-        setErrorMessage(raw || "Don't try to Enter this, You're not an OWNER");
+        setErrorMessage(raw || "Registration is closed. System initialized.");
       }
     } finally {
       setIsSubmitting(false);
@@ -173,7 +222,17 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       if (!lock?.isInitialized) {
         setLock(res.lock);
       }
-      // Immediate 0ms login without waiting
+
+      // Sync backend session
+      fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: res.user.email,
+          displayName: res.user.displayName
+        })
+      }).catch(() => {});
+
       onAuthenticated(res.user, res.lock);
     } catch (err: any) {
       console.error("Google auth error:", err);
@@ -183,7 +242,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
       } else if (raw.includes("cancelled") || raw.includes("closed-by-user")) {
         setErrorMessage("Authentication cancelled by user.");
       } else {
-        setErrorMessage("Don't try to Enter this, You're not an OWNER");
+        setErrorMessage("Registration is closed. System initialized.");
       }
     } finally {
       setIsSubmitting(false);
@@ -193,87 +252,76 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
   const isInitialized = lock?.isInitialized ?? false;
 
   return (
-    <div className={`min-h-screen flex flex-col justify-center items-center px-4 py-8 relative overflow-hidden transition-colors duration-500 ${
-      isDarkMode ? 'bg-[#060a13] text-slate-100' : 'bg-slate-50 text-slate-900'
-    }`}>
-      {/* Background Decorative Grid and Glow */}
-      <div className="absolute inset-0 bg-[radial-gradient(#3730a3_1px,transparent_1px)] [background-size:24px_24px] opacity-15 pointer-events-none" />
-      <div className="absolute -top-40 -right-40 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none" />
+    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col justify-center items-center px-4 py-8 relative overflow-hidden transition-all duration-500">
+      {/* Background Decorative Ambient Glows */}
+      <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-25 pointer-events-none" />
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[350px] bg-indigo-600/10 rounded-full blur-[110px] pointer-events-none" />
+      <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-purple-600/10 rounded-full blur-[90px] pointer-events-none" />
 
-      {/* Main Container with smooth fade-in */}
+      {/* Main Container with smooth fade/slide transition */}
       <div className="w-full max-w-md relative z-10 animate-in fade-in zoom-in-95 duration-500">
         
-        {/* Brand Header */}
-        <div className="text-center mb-6 space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 shadow-xl shadow-indigo-950/40 text-white mb-2 ring-4 ring-indigo-500/10">
-            {/* Cafe Spoon Icon */}
-            <svg 
-              className="w-7 h-7 text-white" 
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2" 
-              strokeLinecap="round" 
-              strokeLinejoin="round"
-            >
-              <path d="M12 2C8.5 2 6 4.8 6 8.5c0 3.2 2.2 5.8 5 6.4V21a1 1 0 0 0 2 0v-6.1c2.8-.6 5-3.2 5-6.4C18 4.8 15.5 2 12 2z" />
-              <path d="M12 4.5c-1.8 0-3 1.8-3 4" strokeWidth="1.5" strokeOpacity="0.45" />
-            </svg>
-          </div>
-          <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight flex items-center justify-center gap-2">
-              <span>The Barozza Platform</span>
-            </h1>
+        {/* Top Floating Badge Accent: Glowing "Secure Auth" / "Single Admin Sync" */}
+        <div className="text-center mb-6 space-y-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-800 text-xs font-medium text-slate-300 shadow-xl shadow-black/40 backdrop-blur-md">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">
+              {isInitialized ? 'Single Admin Sync' : 'Secure Auth'}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/40">
+              {isInitialized ? 'Locked (1/1)' : 'Awaiting Owner'}
+            </span>
           </div>
 
-          {/* Strict Single-User Status Ribbon */}
-          <div className="pt-2 flex justify-center">
-            {isLoadingLock ? (
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700 animate-pulse">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                <span>Checking System Security Protocol...</span>
-              </div>
-            ) : isInitialized ? (
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-rose-950/70 text-rose-300 border border-rose-800/80 shadow-xs">
-                <Lock className="w-3 h-3 text-rose-400" />
-                <span>Single-User Locked • Registration Closed</span>
-              </div>
-            ) : (
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-indigo-950/70 text-indigo-300 border border-indigo-700/80 shadow-xs animate-pulse">
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Initial Setup Mode • Awaiting First Owner</span>
-              </div>
-            )}
+          <div className="space-y-1">
+            <h1 className="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
+              <span>The Barozza Platform</span>
+            </h1>
+            <p className="text-xs text-slate-400">
+              {isInitialized
+                ? 'Authorized Administrator Authentication Console'
+                : 'Initial Platform Onboarding & Master Ownership Setup'}
+            </p>
           </div>
         </div>
 
-        {/* Card Component */}
-        <div className={`rounded-3xl border shadow-2xl backdrop-blur-md p-6 sm:p-8 transition-all duration-300 ${
-          isDarkMode 
-            ? 'bg-slate-900/90 border-slate-800/80 shadow-black/60' 
-            : 'bg-white border-slate-200/80 shadow-slate-200/60'
-        }`}>
+        {/* Card Component: Rounded-2xl with subtle translucent border matching reference */}
+        <div className="rounded-2xl border border-slate-800 bg-[#0f172a]/80 shadow-2xl shadow-black/80 backdrop-blur-xl p-6 sm:p-7 relative transition-all duration-300">
           
-          {/* Card Header */}
-          <div className="mb-6 border-b pb-4 border-slate-800/60">
-            <h2 className="text-lg font-bold tracking-tight text-white flex items-center justify-between">
-              <span>{isInitialized ? 'Platform Owner Sign-In' : 'Claim Initial Platform Ownership'}</span>
-            </h2>
+          {/* Card Header & Badge */}
+          <div className="flex items-center justify-between pb-4 mb-5 border-b border-slate-800/80">
+            <div>
+              <h2 className="text-sm font-bold text-white tracking-wide">
+                {activeMode === 'signup' ? 'First-Time Sign-Up' : 'Administrator Sign-In'}
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {activeMode === 'signup' 
+                  ? 'The very first user becomes the permanent platform owner.' 
+                  : 'Enter authorized owner credentials to access the console.'}
+              </p>
+            </div>
+            <div className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 flex items-center gap-1.5 shrink-0 text-[10px] font-mono font-bold text-slate-300">
+              <Lock className="w-3 h-3 text-indigo-400" />
+              <span>Single-User</span>
+            </div>
           </div>
 
-          {/* Feedback Messages */}
+          {/* Feedback Error / Success Alert */}
           {errorMessage && (
-            <div className="mb-5 p-3.5 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-200 text-xs flex items-start gap-2.5 animate-in fade-in duration-200">
+            <div className="mb-4 p-3 rounded-xl bg-rose-950/70 border border-rose-800/80 text-rose-200 text-xs flex items-start gap-2.5 animate-in fade-in duration-200">
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div className="leading-relaxed font-medium">
+              <div className="leading-relaxed font-semibold">
                 {errorMessage}
               </div>
             </div>
           )}
 
           {successMessage && (
-            <div className="mb-5 p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-700/80 text-emerald-200 text-xs flex items-start gap-2.5 animate-in fade-in duration-200">
+            <div className="mb-4 p-3 rounded-xl bg-emerald-950/70 border border-emerald-700/80 text-emerald-200 text-xs flex items-start gap-2.5 animate-in fade-in duration-200">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div className="leading-relaxed font-medium">
                 {successMessage}
@@ -281,139 +329,32 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
             </div>
           )}
 
-          {/* Forms */}
-          {isInitialized ? (
+          {/* Form Options */}
+          {activeMode === 'signup' ? (
             /* ========================================================================= */
-            /* 1. INITIALIZED MODE: STRICT OWNER LOGIN ONLY (Sign-up permanently hidden) */
-            /* ========================================================================= */
-            <form onSubmit={handleLoginOwner} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5 uppercase tracking-wider">
-                  Administrator Email
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 pointer-events-none" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder=""
-                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-xs border outline-hidden transition font-mono ${
-                      isDarkMode 
-                        ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500' 
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5 uppercase tracking-wider">
-                  Master Security Passphrase
-                </label>
-                <div className="relative">
-                  <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 pointer-events-none" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    autoFocus
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder=""
-                    className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-xs border outline-hidden transition ${
-                      isDarkMode 
-                        ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500' 
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600'
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-white transition cursor-pointer"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Verifying Credentials...</span>
-                  </>
-                ) : (
-                  <>
-                    <Fingerprint className="w-4 h-4" />
-                    <span>Authenticate as System Owner</span>
-                  </>
-                )}
-              </button>
-
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-800" />
-                </div>
-                <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-wider">
-                  <span className={`px-2 ${isDarkMode ? 'bg-slate-900 text-slate-500' : 'bg-white text-slate-400'}`}>
-                    Or Verify Via Enterprise SSO
-                  </span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleGoogleAuth}
-                disabled={isSubmitting}
-                className={`w-full py-2.5 px-4 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 ${
-                  isDarkMode 
-                    ? 'bg-slate-800/80 hover:bg-slate-700 text-white border-slate-700' 
-                    : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300 shadow-xs'
-                }`}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                </svg>
-                <span>Verify Identity via Google OAuth</span>
-              </button>
-            </form>
-          ) : (
-            /* ========================================================================= */
-            /* 2. UNINITIALIZED MODE: FIRST OWNER INITIALIZATION ONLY */
+            /* 1. FIRST-TIME SIGN-UP FORM: First Name, Last Name, Email, Password        */
             /* ========================================================================= */
             <form onSubmit={handleRegisterOwner} className="space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1 uppercase tracking-wider">
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
                     First Name
                   </label>
                   <div className="relative">
-                    <User className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                    <User className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
                     <input
                       type="text"
                       required
                       value={firstName}
                       onChange={(e) => setFirstName(e.target.value)}
                       placeholder="Enter your legal first name"
-                      className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs border outline-hidden transition ${
-                        isDarkMode 
-                          ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500' 
-                          : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600'
-                      }`}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1 uppercase tracking-wider">
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
                     Last Name
                   </label>
                   <input
@@ -422,85 +363,73 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
                     placeholder="Enter your legal last name"
-                    className={`w-full px-3 py-2 rounded-xl text-xs border outline-hidden transition ${
-                      isDarkMode 
-                        ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500' 
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600'
-                    }`}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1 uppercase tracking-wider">
-                  Master Administrator Email
+                <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
+                  Official Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                  <Mail className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="e.g., alex.turner@company.com"
-                    className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs border outline-hidden transition font-mono ${
-                      isDarkMode 
-                        ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500' 
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600'
-                    }`}
+                    className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1 uppercase tracking-wider">
-                  Master Security Passphrase
+                <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
+                  Password
                 </label>
                 <div className="relative">
-                  <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                  <KeyRound className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Create master passphrase (min. 8 characters)"
-                    className={`w-full pl-9 pr-9 py-2 rounded-xl text-xs border outline-hidden transition ${
-                      isDarkMode 
-                        ? 'bg-slate-950 border-slate-700/80 text-white placeholder-slate-500 focus:border-indigo-500' 
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-indigo-600'
-                    }`}
+                    placeholder="Create strong security passphrase"
+                    className="w-full pl-9 pr-9 py-2 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2.5 top-2 p-1 text-slate-400 hover:text-white transition cursor-pointer"
+                    className="absolute right-2.5 top-2 p-1 text-slate-500 hover:text-slate-300 transition cursor-pointer"
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-700/40 text-[11px] text-indigo-200 leading-relaxed flex items-start gap-2">
+              <div className="p-3 rounded-xl bg-indigo-950/30 border border-indigo-800/40 text-[11px] text-indigo-200/90 leading-relaxed flex items-start gap-2">
                 <ShieldAlert className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Strict Single-User Policy:</strong> Once this account is initialized, this system will lock permanently to this owner. No other users can register.
+                  <strong>Strict Single-User Policy:</strong> Once registered, all subsequent sign-ups will be locked immediately.
                 </span>
               </div>
 
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Establishing Master Ownership...</span>
+                    <span>Registering Permanent Owner...</span>
                   </>
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Initialize System & Claim Ownership</span>
+                    <span>Complete Onboarding & Claim Ownership</span>
                   </>
                 )}
               </button>
@@ -510,21 +439,18 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                   <div className="w-full border-t border-slate-800" />
                 </div>
                 <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-wider">
-                  <span className={`px-2 ${isDarkMode ? 'bg-slate-900 text-slate-500' : 'bg-white text-slate-400'}`}>
-                    Or Initialize with Google Provider
+                  <span className="px-2 bg-[#0f172a] text-slate-500">
+                    Or Continue With OAuth
                   </span>
                 </div>
               </div>
 
+              {/* Alternative Option: "Continue with Google" OAuth button */}
               <button
                 type="button"
                 onClick={handleGoogleAuth}
                 disabled={isSubmitting}
-                className={`w-full py-2.5 px-4 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 ${
-                  isDarkMode 
-                    ? 'bg-slate-800/80 hover:bg-slate-700 text-white border-slate-700' 
-                    : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300 shadow-xs'
-                }`}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-white text-xs font-semibold transition flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 active:scale-[0.99]"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -532,16 +458,139 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onAuthenticated, isDar
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                 </svg>
-                <span>Initialize Ownership via Google OAuth</span>
+                <span>Continue with Google</span>
               </button>
+
+              {isInitialized && (
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveMode('signin');
+                      setErrorMessage(null);
+                    }}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition cursor-pointer"
+                  >
+                    Already initialized? Sign in as Owner →
+                  </button>
+                </div>
+              )}
+            </form>
+          ) : (
+            /* ========================================================================= */
+            /* 2. SIGN-IN MODE: STRICT SINGLE-OWNER LOGIN                                */
+            /* ========================================================================= */
+            <form onSubmit={handleLoginOwner} className="space-y-3.5">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
+                  Administrator Email
+                </label>
+                <div className="relative">
+                  <Mail className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="e.g., alex.turner@company.com"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1 tracking-wider uppercase">
+                  Master Password
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Create strong security passphrase"
+                    className="w-full pl-9 pr-9 py-2.5 rounded-xl text-xs bg-slate-950/80 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-2.5 p-1 text-slate-500 hover:text-slate-300 transition cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Verifying Owner Credentials...</span>
+                  </>
+                ) : (
+                  <>
+                    <Fingerprint className="w-4 h-4" />
+                    <span>Authenticate as Owner</span>
+                  </>
+                )}
+              </button>
+
+              <div className="relative my-3">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-800" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-wider">
+                  <span className="px-2 bg-[#0f172a] text-slate-500">
+                    Or Verify With Google OAuth
+                  </span>
+                </div>
+              </div>
+
+              {/* Alternative Option: "Continue with Google" OAuth button */}
+              <button
+                type="button"
+                onClick={handleGoogleAuth}
+                disabled={isSubmitting}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-white text-xs font-semibold transition flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 active:scale-[0.99]"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                </svg>
+                <span>Continue with Google</span>
+              </button>
+
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isInitialized) {
+                      setErrorMessage("Registration is closed. System initialized.");
+                    } else {
+                      setActiveMode('signup');
+                      setErrorMessage(null);
+                    }
+                  }}
+                  className="text-xs text-slate-400 hover:text-slate-300 font-medium transition cursor-pointer"
+                >
+                  Need to register a new account?
+                </button>
+              </div>
             </form>
           )}
         </div>
 
         {/* Security Footer Details */}
-        <div className="mt-6 text-center text-xs text-slate-500">
+        <div className="mt-5 text-center text-xs text-slate-500">
           <p className="text-[11px] opacity-75">
-            The Brozza Console System Security • Enterprise Tier
+            Single-User Protected Platform • Enterprise Security
           </p>
         </div>
       </div>

@@ -608,9 +608,113 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      {/* 4 Today's Metric Cards - Exactly matching reference image */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Card 1: Today's Total Orders */}
+        <div className={`rounded-2xl border ${isDarkMode ? 'border-slate-800 bg-[#080d19]' : 'border-slate-800 bg-[#080d19]'} p-5 sm:p-6 shadow-xl flex flex-col justify-between min-h-[145px]`}>
+          <span className="text-xs font-bold text-slate-300 tracking-wider uppercase">
+            TODAY'S TOTAL ORDERS
+          </span>
+          <div className="flex items-end justify-between mt-3">
+            <div>
+              <div className="text-4xl sm:text-5xl font-black text-white font-mono tracking-tight leading-none">
+                {todaysOrdersCount}
+              </div>
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2">
+                TOTAL ORDERS
+              </div>
+            </div>
+            <div className="shrink-0 mb-0.5">
+              <DeliveryBox3DIcon />
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Today's Total Revenue */}
+        <div className={`rounded-2xl border ${isDarkMode ? 'border-slate-800 bg-[#080d19]' : 'border-slate-800 bg-[#080d19]'} p-5 sm:p-6 shadow-xl flex flex-col justify-between min-h-[145px]`}>
+          <span className="text-xs font-bold text-slate-300 tracking-wider uppercase">
+            TODAY'S TOTAL REVENUE
+          </span>
+          <div className="flex items-end justify-between mt-3">
+            <div>
+              <div className="text-4xl sm:text-5xl font-black text-white font-mono tracking-tight leading-none">
+                ₹{todaysTotalRevenue.toFixed(2)}
+              </div>
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2">
+                TOTAL REVENUE
+              </div>
+            </div>
+            <div className="shrink-0 mb-0.5">
+              <CoinsRevenue3DIcon />
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Payment Methods */}
+        <div className={`rounded-2xl border ${isDarkMode ? 'border-slate-800 bg-[#080d19]' : 'border-slate-800 bg-[#080d19]'} p-5 sm:p-6 shadow-xl flex flex-col justify-between min-h-[145px]`}>
+          <span className="text-xs font-bold text-slate-300 tracking-wider uppercase">
+            PAYMENT METHODS
+          </span>
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            {/* UPI Column */}
+            <div>
+              <div className="flex items-center gap-1.5 h-6">
+                <span className="italic font-black text-sm tracking-tight text-slate-200 font-mono">UPI</span>
+                <span className="text-slate-300 text-xs tracking-tighter">❯❯</span>
+              </div>
+              <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight mt-2 leading-none">
+                {todaysUpiOrdersCount}
+              </div>
+            </div>
+
+            {/* COD Column */}
+            <div>
+              <div className="flex items-center gap-1.5 h-6">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-600/80 bg-slate-800 text-[10px] font-extrabold text-slate-300 tracking-tight shadow-xs">
+                  <Lock className="w-2.5 h-2.5 text-slate-300" />
+                  COD
+                </span>
+                <span className="text-xs font-bold text-slate-300 tracking-tight">COD</span>
+              </div>
+              <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight mt-2 leading-none">
+                {todaysCodOrdersCount}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Revenue Breakdown */}
+        <div className={`rounded-2xl border ${isDarkMode ? 'border-slate-800 bg-[#080d19]' : 'border-slate-800 bg-[#080d19]'} p-5 sm:p-6 shadow-xl flex flex-col justify-between min-h-[145px]`}>
+          <span className="text-xs font-bold text-slate-300 tracking-wider uppercase">
+            REVENUE BREAKDOWN
+          </span>
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            {/* UPI Received */}
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wide h-6 flex items-center">
+                UPI RECEIVED
+              </div>
+              <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight mt-2 leading-none">
+                ₹{todaysUpiTotalAmount.toFixed(2)}
+              </div>
+            </div>
+
+            {/* COD Pending Amount with vertical separator */}
+            <div className="border-l border-slate-800/90 pl-4 sm:pl-6">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wide h-6 flex items-center">
+                COD PENDING AMOUNT
+              </div>
+              <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight mt-2 leading-none">
+                ₹{todaysCodPendingAmount.toFixed(2)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Orders Management Anchor & Section */}
-      <div id="orders-management-section" className="space-y-3 pt-2">
+      <div id="orders-management-section" className="space-y-3 pt-1">
 
       {/* Search & Filter Toolbar */}
 

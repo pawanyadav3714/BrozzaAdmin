@@ -72,7 +72,7 @@ export default function App() {
   const [cafeStatus, setCafeStatus] = useState<CafeStatus>(getInitialCafeStatus);
   const [isCafeStatusModalOpen, setIsCafeStatusModalOpen] = useState<boolean>(false);
 
-  // Helper to filter out permanently deleted products
+  // Helper to filter out permanently deleted products (never dropping active canonical/saved dishes)
   const filterDeletedProducts = useCallback((prods: Product[]) => {
     const deletedRegistry = new Set<string>();
     try {
@@ -90,6 +90,8 @@ export default function App() {
       const pDishId = String(p.dishId || '').toLowerCase().trim();
       const pSku = String(p.sku || '').toLowerCase().trim();
       const pName = String(p.name || '').toLowerCase().trim();
+
+      // Canonical dishes and active dishes are always protected unless explicitly deleted
       return !deletedRegistry.has(pId) && !deletedRegistry.has(pDishId) && !deletedRegistry.has(pSku) && !deletedRegistry.has(pName);
     });
   }, []);
@@ -117,6 +119,17 @@ export default function App() {
           parsed.forEach(id => deletedRegistry.add(String(id).toLowerCase().trim()));
         }
       }
+    } catch (e) {}
+
+    // Self-heal: ensure active dishes are purged from deleted registry
+    initialList.forEach(p => {
+      if (p.id) deletedRegistry.delete(String(p.id).toLowerCase().trim());
+      if (p.dishId) deletedRegistry.delete(String(p.dishId).toLowerCase().trim());
+      if (p.sku) deletedRegistry.delete(String(p.sku).toLowerCase().trim());
+      if (p.name) deletedRegistry.delete(String(p.name).toLowerCase().trim());
+    });
+    try {
+      localStorage.setItem("barozza_deleted_dish_ids", JSON.stringify(Array.from(deletedRegistry)));
     } catch (e) {}
 
     const ownerZeroSet = new Set<string>();
@@ -149,7 +162,7 @@ export default function App() {
       if (isCafeCurrentlyOpen) {
         if (isOwnerZero) {
           finalStock = 0;
-        } else if (finalStock === undefined || finalStock === null || finalStock === 0) {
+        } else if (finalStock === undefined || finalStock === null) {
           finalStock = 25;
         }
       }
@@ -479,7 +492,62 @@ export default function App() {
         if (catalogDishes && catalogDishes.length > 0) {
           const filteredCatalog = filterDeletedProducts(catalogDishes);
           setProducts(prev => {
-            const merged = filterDeletedProducts(deduplicateProducts([...filteredCatalog, ...prev]));
+            // Build index of previous rich product entries to preserve fields like costPrice, lowStockThreshold, etc.
+            const prevIndex = new Map<string, Product>();
+            prev.forEach(p => {
+              if (p.id) prevIndex.set(String(p.id).toLowerCase(), p);
+              if (p.dishId) prevIndex.set(String(p.dishId).toLowerCase(), p);
+              if (p.sku) prevIndex.set(String(p.sku).toLowerCase(), p);
+              if (p.name) prevIndex.set(String(p.name).toLowerCase().trim(), p);
+            });
+
+            const enrichedCatalog: Product[] = filteredCatalog.map((cd: any) => {
+              const key1 = String(cd.id || '').toLowerCase();
+              const key2 = String(cd.dishId || '').toLowerCase();
+              const key3 = String(cd.sku || '').toLowerCase();
+              const key4 = String(cd.name || '').toLowerCase().trim();
+              const existing = prevIndex.get(key1) || prevIndex.get(key2) || prevIndex.get(key3) || prevIndex.get(key4);
+
+              const stockVal = typeof cd.stock === 'number' ? cd.stock : (existing?.stock ?? 25);
+              const lowThreshold = existing?.lowStockThreshold ?? 5;
+              const statusVal = stockVal === 0 ? 'out_of_stock' : stockVal <= lowThreshold ? 'low_stock' : 'in_stock';
+
+              return {
+                id: cd.id || existing?.id || `prod_${Date.now()}`,
+                dishId: cd.dishId || cd.id || existing?.dishId,
+                sku: cd.sku || existing?.sku || `BRZ-DISH-${cd.id}`,
+                name: cd.name || existing?.name || 'Cafe Dish',
+                price: typeof cd.price === 'number' ? cd.price : (existing?.price ?? 40),
+                costPrice: existing?.costPrice ?? Math.round((Number(cd.price) || 40) * 0.5),
+                category: cd.category || existing?.category || 'Starters',
+                description: cd.description || existing?.description || '',
+                imageUrl: cd.imageUrl || cd.image || existing?.imageUrl || '/images/frenchh.png',
+                stock: stockVal,
+                lowStockThreshold: lowThreshold,
+                status: statusVal,
+                available: cd.available !== undefined ? cd.available : stockVal > 0,
+                syncedWithExternalStore: true,
+                lastSyncedAt: cd.lastUpdated || existing?.lastSyncedAt || new Date().toISOString()
+              };
+            });
+
+            // Keep custom local items that haven't synced yet
+            const enrichedKeys = new Set(enrichedCatalog.map(e => String(e.id).toLowerCase()));
+            enrichedCatalog.forEach(e => {
+              if (e.dishId) enrichedKeys.add(String(e.dishId).toLowerCase());
+              if (e.sku) enrichedKeys.add(String(e.sku).toLowerCase());
+              if (e.name) enrichedKeys.add(String(e.name).toLowerCase().trim());
+            });
+
+            const localExtras = prev.filter(p => {
+              const k1 = String(p.id || '').toLowerCase();
+              const k2 = String(p.dishId || '').toLowerCase();
+              const k3 = String(p.sku || '').toLowerCase();
+              const k4 = String(p.name || '').toLowerCase().trim();
+              return !enrichedKeys.has(k1) && !enrichedKeys.has(k2) && !enrichedKeys.has(k3) && !enrichedKeys.has(k4);
+            });
+
+            const merged = filterDeletedProducts(deduplicateProducts([...localExtras, ...enrichedCatalog]));
             try {
               localStorage.setItem("barozza_admin_products", JSON.stringify(merged));
             } catch (e) {}
@@ -930,7 +998,7 @@ export default function App() {
   const handleSaveProduct = async (productData: Partial<Product>) => {
     let updatedProducts: Product[] = [];
     if (productData.id) {
-      // Edit
+      // Edit existing dish
       updatedProducts = products.map(p => (p.id === productData.id || (productData.dishId && p.dishId === productData.dishId) || (productData.sku && p.sku === productData.sku)) ? { 
         ...p, 
         ...productData,
@@ -940,15 +1008,40 @@ export default function App() {
       setProducts(updatedProducts);
       try {
         localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+        window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { products: updatedProducts } }));
       } catch (e) {}
       showToast("Dish Updated (Live Sync)", `"${productData.name}" (₹${Number(productData.price)}) updated and live-synced with customer website & dashboard!`);
     } else {
-      // Add new dish
+      // Add new dish with collision-free unique IDs
       const dishCount = products.filter(p => p.sku?.startsWith('BRZ-DISH')).length + 1;
+      const now = Date.now();
+      const uniqueSuffix = Math.random().toString(36).substring(2, 6);
+      const newProdId = productData.id || `prod_${now}_${uniqueSuffix}`;
+      const newDishId = productData.dishId || `dish_${now}`;
+      const finalSku = productData.sku || `BRZ-DISH-${String(dishCount).padStart(2, '0')}`;
+
+      // Cleanse from deleted registry so it is never filtered out
+      try {
+        const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
+        if (rawDel) {
+          const parsed = JSON.parse(rawDel);
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.filter(id => {
+              const str = String(id).toLowerCase().trim();
+              return str !== newProdId.toLowerCase() &&
+                     str !== newDishId.toLowerCase() &&
+                     str !== finalSku.toLowerCase() &&
+                     str !== (productData.name || '').toLowerCase().trim();
+            });
+            localStorage.setItem("barozza_deleted_dish_ids", JSON.stringify(cleaned));
+          }
+        }
+      } catch (e) {}
+
       const newProd: Product = {
-        id: `prod_${Date.now()}`,
-        dishId: String(products.length + 1),
-        sku: productData.sku || `BRZ-DISH-${String(dishCount).padStart(2, '0')}`,
+        id: newProdId,
+        dishId: newDishId,
+        sku: finalSku,
         name: productData.name || 'New Cafe Dish',
         category: productData.category || 'Starters',
         price: Number(productData.price || 40.00),
@@ -959,18 +1052,24 @@ export default function App() {
         syncedWithExternalStore: true,
         lastSyncedAt: new Date().toISOString(),
         imageUrl: productData.imageUrl || 'https://brozza.vercel.app/images/frenchh.png',
-        description: productData.description || `${productData.name || 'Dish'} prepared fresh at The Barozza Cafe.`
+        description: productData.description || `${productData.name || 'Dish'} prepared fresh at The Barozza Cafe.`,
+        available: Number(productData.stock ?? 25) > 0
       };
       updatedProducts = [newProd, ...products];
       setProducts(updatedProducts);
       try {
         localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+        window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { products: updatedProducts } }));
       } catch (e) {}
       showToast("Dish Added to Catalog", `"${newProd.name}" (₹${newProd.price}) added and pushed to customer website!`);
     }
 
     // Sync to Firestore doc orders/barozza_menu_catalog & customer site
-    await syncDishesToFirestoreAndStore(updatedProducts);
+    try {
+      await syncDishesToFirestoreAndStore(updatedProducts);
+    } catch (syncErr) {
+      console.warn("Background dish sync warning:", syncErr);
+    }
 
     setSyncLogs(prev => [
       {
@@ -1111,6 +1210,7 @@ export default function App() {
     setProducts(updatedProducts);
     try {
       localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+      window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { products: updatedProducts } }));
     } catch (e) {}
 
     await syncDishesToFirestoreAndStore(updatedProducts);
@@ -1166,17 +1266,21 @@ export default function App() {
     showToast("Dishes Synchronized", `Successfully synced ${products.length} dishes & prices with ${apiConfig.partnerStoreUrl}`, 'success');
   };
 
-  // Quick price update from inventory table
+  // Quick price update from inventory table (Live instant sync)
   const handleQuickUpdatePrice = async (productId: string, newPrice: number) => {
     let updatedProd: Product | undefined;
     const updatedProducts = products.map(p => {
-      if (p.id === productId) {
+      if (p.id === productId || p.dishId === productId || p.sku === productId) {
         updatedProd = { ...p, price: newPrice, lastSyncedAt: new Date().toISOString() };
         return updatedProd;
       }
       return p;
     });
     setProducts(updatedProducts);
+    try {
+      localStorage.setItem("barozza_admin_products", JSON.stringify(updatedProducts));
+      window.dispatchEvent(new CustomEvent('barozza_stock_updated', { detail: { products: updatedProducts } }));
+    } catch (e) {}
     await syncDishesToFirestoreAndStore(updatedProducts);
     showToast("Dish Price Updated", `Updated ${updatedProd?.name || 'Dish'} price to ₹${newPrice} — synced with customer storefront!`, 'success');
   };

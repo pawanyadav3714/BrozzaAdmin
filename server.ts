@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -13,17 +14,65 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ---------------------------------------------------------------------------
-// 1. Single-User Admin Configuration
+// 1. Single-User Platform Lock & Persistent Configuration
 // ---------------------------------------------------------------------------
-// Only ONE authorized admin user can access the admin dashboard.
-// Configured via environment variables: ADMIN_USERNAME, ADMIN_EMAIL, ADMIN_PASSWORD_HASH
+// The platform enforces a strict SINGLE-USER policy:
+// Only ONE permanent owner exists. Any subsequent registration attempts
+// return "Registration is closed. System initialized."
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'pawanyadav3714@gmail.com').toLowerCase().trim();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.ADMIN_USERNAME || 'pawanyadav3714@gmail.com').toLowerCase().trim();
 const SECONDARY_ADMIN_USER = 'admin@barozza.com';
 
-// Generate or use securely hashed password. Plaintext comparison is STRICTLY prohibited.
 const DEFAULT_FALLBACK_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@Barozza2026!';
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || bcrypt.hashSync(DEFAULT_FALLBACK_PASSWORD, 10);
+
+interface SingleUserLockRecord {
+  isInitialized: boolean;
+  ownerEmail: string;
+  ownerName: string;
+  ownerFirstName?: string;
+  ownerLastName?: string;
+  passwordHash?: string;
+  authProvider: 'password' | 'google';
+  registeredAt: string;
+  lastLoginAt: string;
+}
+
+const LOCK_FILE_PATH = path.resolve(__dirname, 'single_user_lock.json');
+
+function loadOwnerLockFromDisk(): SingleUserLockRecord {
+  try {
+    if (fs.existsSync(LOCK_FILE_PATH)) {
+      const content = fs.readFileSync(LOCK_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (parsed && parsed.isInitialized && parsed.ownerEmail) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  // Fallback to designated owner from environment
+  return {
+    isInitialized: true,
+    ownerEmail: ADMIN_EMAIL,
+    ownerName: 'Pawan Yadav (Owner)',
+    ownerFirstName: 'Pawan',
+    ownerLastName: 'Yadav',
+    passwordHash: ADMIN_PASSWORD_HASH,
+    authProvider: 'password',
+    registeredAt: '2026-01-01T00:00:00.000Z',
+    lastLoginAt: new Date().toISOString()
+  };
+}
+
+let activeLock: SingleUserLockRecord = loadOwnerLockFromDisk();
+
+function saveOwnerLockToDisk(lock: SingleUserLockRecord) {
+  activeLock = lock;
+  try {
+    fs.writeFileSync(LOCK_FILE_PATH, JSON.stringify(lock, null, 2), 'utf-8');
+  } catch (e) {}
+}
 
 // Secret for signing session tokens
 const SESSION_SECRET = process.env.SESSION_SECRET || 'barozza-secure-admin-session-secret-2026-xyz789';
@@ -177,10 +226,79 @@ async function startServer() {
   };
 
   // -------------------------------------------------------------------------
-  // Auth API Endpoints
+  // Auth API Endpoints (Strict Single-User Platform Lock)
   // -------------------------------------------------------------------------
 
-  // 1. Password Login (Strict Single Admin User Verification + Rate Limiting)
+  // 0. Query Single-User Lock Status
+  app.get('/api/auth/single-user-lock', (_req: Request, res: Response) => {
+    return res.json({
+      isInitialized: activeLock.isInitialized,
+      ownerEmail: activeLock.isInitialized ? activeLock.ownerEmail : '',
+      ownerName: activeLock.isInitialized ? activeLock.ownerName : '',
+      authProvider: activeLock.authProvider,
+      registeredAt: activeLock.registeredAt
+    });
+  });
+
+  // 1. Initial Owner Registration (Only allowed ONCE for the very first person)
+  app.post('/api/auth/register-owner', (req: Request, res: Response) => {
+    // If an owner already exists, permanently lock out new signups
+    if (activeLock.isInitialized) {
+      return res.status(403).json({
+        error: 'Registration is closed. System initialized.',
+        isLocked: true
+      });
+    }
+
+    const { firstName, lastName, email, password } = req.body;
+    if (!firstName || !lastName || !email || !password) {
+      return res.status(400).json({ error: 'First Name, Last Name, Email, and Password are all required.' });
+    }
+
+    const cleanEmail = String(email).toLowerCase().trim();
+    const fullName = `${String(firstName).trim()} ${String(lastName).trim()}`;
+    const passwordHash = bcrypt.hashSync(password, 10);
+
+    const newLock: SingleUserLockRecord = {
+      isInitialized: true,
+      ownerEmail: cleanEmail,
+      ownerName: fullName,
+      ownerFirstName: String(firstName).trim(),
+      ownerLastName: String(lastName).trim(),
+      passwordHash,
+      authProvider: 'password',
+      registeredAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString()
+    };
+    saveOwnerLockToDisk(newLock);
+
+    const sessionToken = generateSessionToken(cleanEmail, cleanEmail);
+    res.cookie('admin_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+
+    return res.json({
+      success: true,
+      message: 'Owner onboarded and system locked permanently.',
+      token: sessionToken,
+      user: {
+        username: cleanEmail,
+        email: cleanEmail,
+        name: fullName,
+        role: 'admin'
+      },
+      lock: {
+        isInitialized: true,
+        ownerEmail: cleanEmail,
+        ownerName: fullName
+      }
+    });
+  });
+
+  // 2. Password Login (Strict Single Admin User Verification + Rate Limiting)
   app.post('/api/auth/login', (req: Request, res: Response) => {
     const ip = getClientIp(req);
     const rateCheck = checkRateLimit(ip);
@@ -200,25 +318,35 @@ async function startServer() {
 
     const normalizedUser = String(username).toLowerCase().trim();
 
+    // Verify system initialization
+    if (!activeLock.isInitialized) {
+      return res.status(400).json({
+        error: 'System is not yet initialized. Please complete owner onboarding first.',
+        uninitialized: true
+      });
+    }
+
     // Check single admin username/email
     const isAuthorizedUsername = 
+      normalizedUser === activeLock.ownerEmail.toLowerCase().trim() ||
       normalizedUser === ADMIN_USERNAME ||
       normalizedUser === ADMIN_EMAIL ||
       normalizedUser === SECONDARY_ADMIN_USER ||
+      normalizedUser === 'pawanyadav3714@gmail.com' ||
       normalizedUser === 'rohit' ||
       normalizedUser === 'admin';
 
     if (!isAuthorizedUsername) {
       recordFailedAttempt(ip);
-      const updatedCheck = checkRateLimit(ip);
-      return res.status(401).json({
-        error: 'Invalid credentials. Only the authorized administrator can access this console.',
-        remainingAttempts: updatedCheck.remainingAttempts
+      return res.status(403).json({
+        error: 'Registration is closed. System initialized.',
+        isLocked: true
       });
     }
 
-    // Verify Password using bcrypt (Plain text password comparison is STRICTLY prohibited)
-    const isPasswordValid = bcrypt.compareSync(password, ADMIN_PASSWORD_HASH);
+    // Verify Password using bcrypt
+    const hashToVerify = activeLock.passwordHash || ADMIN_PASSWORD_HASH;
+    const isPasswordValid = bcrypt.compareSync(password, hashToVerify);
 
     if (!isPasswordValid) {
       recordFailedAttempt(ip);
@@ -234,7 +362,7 @@ async function startServer() {
     resetRateLimit(ip);
 
     // Create secure session
-    const sessionToken = generateSessionToken(normalizedUser, ADMIN_EMAIL);
+    const sessionToken = generateSessionToken(normalizedUser, activeLock.ownerEmail || ADMIN_EMAIL);
     const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
 
     // Set secure HTTP-only cookie
@@ -251,14 +379,14 @@ async function startServer() {
       token: sessionToken,
       user: {
         username: normalizedUser,
-        email: ADMIN_EMAIL,
-        name: 'The Admin (Rohit / Pawan)',
+        email: activeLock.ownerEmail || ADMIN_EMAIL,
+        name: activeLock.ownerName || 'The Admin (Rohit / Pawan)',
         role: 'admin'
       }
     });
   });
 
-  // 2. Google OAuth Admin Verification (Only the single designated admin Google account is authorized)
+  // 3. Google OAuth Admin Verification
   app.post('/api/auth/google', (req: Request, res: Response) => {
     const ip = getClientIp(req);
     const rateCheck = checkRateLimit(ip);
@@ -270,7 +398,7 @@ async function startServer() {
       });
     }
 
-    const { email, displayName, googleId } = req.body;
+    const { email, displayName } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'Google account email is required.' });
@@ -278,8 +406,46 @@ async function startServer() {
 
     const normalizedEmail = String(email).toLowerCase().trim();
 
-    // Verify if Google account email matches designated admin email
+    // If system is uninitialized, the first person with Google becomes the permanent owner!
+    if (!activeLock.isInitialized) {
+      const fullName = displayName || normalizedEmail.split('@')[0];
+      const newLock: SingleUserLockRecord = {
+        isInitialized: true,
+        ownerEmail: normalizedEmail,
+        ownerName: fullName,
+        ownerFirstName: fullName.split(' ')[0] || 'Admin',
+        ownerLastName: fullName.split(' ').slice(1).join(' ') || 'Owner',
+        authProvider: 'google',
+        registeredAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString()
+      };
+      saveOwnerLockToDisk(newLock);
+
+      const sessionToken = generateSessionToken(normalizedEmail, normalizedEmail);
+      res.cookie('admin_session', sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000
+      });
+
+      return res.json({
+        success: true,
+        message: 'Owner onboarded via Google and system locked permanently.',
+        token: sessionToken,
+        user: {
+          username: normalizedEmail,
+          email: normalizedEmail,
+          name: fullName,
+          role: 'admin'
+        },
+        lock: newLock
+      });
+    }
+
+    // Verify if Google account email matches designated permanent owner
     const isAuthorizedGoogleUser = 
+      normalizedEmail === activeLock.ownerEmail.toLowerCase().trim() ||
       normalizedEmail === ADMIN_EMAIL ||
       normalizedEmail === ADMIN_USERNAME ||
       normalizedEmail === 'pawanyadav3714@gmail.com' ||
@@ -288,8 +454,8 @@ async function startServer() {
     if (!isAuthorizedGoogleUser) {
       recordFailedAttempt(ip);
       return res.status(403).json({
-        error: `Access Denied: The Google account "${normalizedEmail}" is not authorized as the administrator. Only the authorized owner account can access the admin dashboard.`,
-        authorizedEmail: ADMIN_EMAIL
+        error: 'Registration is closed. System initialized.',
+        isLocked: true
       });
     }
 
@@ -313,7 +479,7 @@ async function startServer() {
       user: {
         username: normalizedEmail,
         email: normalizedEmail,
-        name: displayName || 'Rohit / Pawan (Admin)',
+        name: displayName || activeLock.ownerName || 'Rohit / Pawan (Admin)',
         role: 'admin'
       }
     });

@@ -373,32 +373,30 @@ export const INITIAL_API_CONFIG: ApiSyncConfig = {
  */
 export function deduplicateProducts(rawProducts: Product[]): Product[] {
   if (!Array.isArray(rawProducts)) return [];
-  const seenKeys = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenDishIds = new Set<string>();
   const result: Product[] = [];
 
   for (const p of rawProducts) {
     if (!p) continue;
-    const nameKey = (p.name || '').trim().toLowerCase();
-    const dishIdKey = p.dishId ? `dish-${p.dishId}` : '';
-    const skuKey = p.sku ? `sku-${p.sku.toLowerCase()}` : '';
+    const cleanId = String(p.id || '').trim().toLowerCase();
+    const cleanDishId = String(p.dishId || '').trim().toLowerCase();
 
-    // Check if this product is already in our list
-    if (
-      (nameKey && seenKeys.has(nameKey)) ||
-      (dishIdKey && seenKeys.has(dishIdKey)) ||
-      (skuKey && seenKeys.has(skuKey))
-    ) {
+    // Check if exact same item ID or dishId was already processed
+    if (cleanId && seenIds.has(cleanId)) {
+      continue;
+    }
+    if (cleanDishId && seenDishIds.has(cleanDishId)) {
       continue;
     }
 
-    if (nameKey) seenKeys.add(nameKey);
-    if (dishIdKey) seenKeys.add(dishIdKey);
-    if (skuKey) seenKeys.add(skuKey);
+    if (cleanId) seenIds.add(cleanId);
+    if (cleanDishId) seenDishIds.add(cleanDishId);
 
-    // Extract dish number if any
+    // Extract dish number if any for fallback SKU
     const numberMatch = (p.dishId || p.sku || p.id || '').match(/\d+/);
     const dishNumber = numberMatch ? parseInt(numberMatch[0], 10) : result.length + 1;
-    const canonicalId = p.id && !p.id.match(/^item_\d+$/) ? p.id : `prod-brz-${dishNumber}`;
+    const canonicalId = p.id || `prod-brz-${dishNumber}`;
 
     result.push({
       ...p,

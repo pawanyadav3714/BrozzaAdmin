@@ -54,8 +54,10 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   onUpdateCafeStatus,
   onUpdateStock
 }) => {
-  // Helper to strictly filter out any permanently deleted dish
+  // Helper to strictly filter out any permanently deleted dish (never deleting active admin products)
   const filterDeleted = (list: Product[]) => {
+    if (!list || list.length === 0) return [];
+
     const deletedRegistry = new Set<string>();
     try {
       const rawDel = localStorage.getItem("barozza_deleted_dish_ids");
@@ -67,11 +69,28 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       }
     } catch (e) {}
 
+    // Active products from admin inventory must NEVER be suppressed!
+    const activeAdminKeys = new Set<string>();
+    if (Array.isArray(products) && products.length > 0) {
+      products.forEach(p => {
+        if (p.id) activeAdminKeys.add(String(p.id).toLowerCase().trim());
+        if (p.dishId) activeAdminKeys.add(String(p.dishId).toLowerCase().trim());
+        if (p.sku) activeAdminKeys.add(String(p.sku).toLowerCase().trim());
+        if (p.name) activeAdminKeys.add(String(p.name).toLowerCase().trim());
+      });
+    }
+
     return list.filter(p => {
       const pId = String(p.id || '').toLowerCase().trim();
       const pDishId = String(p.dishId || '').toLowerCase().trim();
       const pSku = String(p.sku || '').toLowerCase().trim();
       const pName = String(p.name || '').toLowerCase().trim();
+
+      // If actively present in the Admin Dashboard, ALWAYS show it!
+      if (activeAdminKeys.has(pId) || activeAdminKeys.has(pDishId) || activeAdminKeys.has(pSku) || activeAdminKeys.has(pName)) {
+        return true;
+      }
+
       return !deletedRegistry.has(pId) && !deletedRegistry.has(pDishId) && !deletedRegistry.has(pSku) && !deletedRegistry.has(pName);
     });
   };
@@ -106,7 +125,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       if (isCafeOpen) {
         if (isOwnerZero) {
           finalStock = 0;
-        } else if (finalStock === undefined || finalStock === null || finalStock === 0) {
+        } else if (finalStock === undefined || finalStock === null) {
           finalStock = 25;
         }
       }
@@ -131,7 +150,34 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   useEffect(() => {
     const unsubCatalog = listenToCatalogDishes((dishes) => {
       if (dishes && dishes.length > 0) {
-        setLiveProducts(filterDeleted(dishes));
+        const filteredCatalog = filterDeleted(dishes);
+        setLiveProducts(prev => {
+          const mergedMap = new Map<string, Product>();
+          // Base with admin products
+          (products && products.length > 0 ? products : prev).forEach(p => {
+            mergedMap.set(p.dishId || p.id, p);
+          });
+          // Overlay remote catalog updates
+          filteredCatalog.forEach(c => {
+            const key = c.dishId || c.id;
+            const existing = mergedMap.get(key) || mergedMap.get(c.id) || mergedMap.get(c.dishId);
+            if (existing) {
+              mergedMap.set(existing.dishId || existing.id, {
+                ...existing,
+                name: c.name || existing.name,
+                price: typeof c.price === 'number' ? c.price : existing.price,
+                stock: typeof c.stock === 'number' ? c.stock : existing.stock,
+                imageUrl: c.imageUrl || (c as any).image || existing.imageUrl,
+                category: c.category || existing.category,
+                description: c.description || existing.description,
+                available: c.available !== undefined ? c.available : (c.stock !== undefined ? c.stock > 0 : existing.available)
+              });
+            } else {
+              mergedMap.set(key, c);
+            }
+          });
+          return Array.from(mergedMap.values());
+        });
       }
     });
     const unsubStatus = listenToCafeStatus((status) => {
@@ -274,18 +320,28 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return () => clearInterval(interval);
   }, [liveCafeStatus]);
 
-  // Categories list
+  // Categories list with live counts
   const categories = useMemo(() => {
-    const list = Array.from(new Set(liveProducts.map(p => p.category || 'General')));
-    return ['All', ...list];
+    const catMap = new Map<string, number>();
+    liveProducts.forEach(p => {
+      const cat = (p.category && p.category.trim()) ? p.category.trim() : 'General';
+      catMap.set(cat, (catMap.get(cat) || 0) + 1);
+    });
+    return [
+      { name: 'All', count: liveProducts.length },
+      ...Array.from(catMap.entries()).map(([name, count]) => ({ name, count }))
+    ];
   }, [liveProducts]);
 
-  // Filtered products
+  // Filtered products matching search and selected category
   const filteredProducts = useMemo(() => {
+    const sTerm = searchTerm.toLowerCase().trim();
     return liveProducts.filter(p => {
-      const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          p.sku.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchCat = selectedCategory === 'All' || p.category === selectedCategory;
+      const pName = String(p.name || '').toLowerCase();
+      const pSku = String(p.sku || '').toLowerCase();
+      const matchSearch = !sTerm || pName.includes(sTerm) || pSku.includes(sTerm);
+      const pCat = String(p.category || 'General').toLowerCase().trim();
+      const matchCat = selectedCategory === 'All' || pCat === selectedCategory.toLowerCase().trim();
       return matchSearch && matchCat;
     });
   }, [liveProducts, searchTerm, selectedCategory]);
@@ -623,15 +679,22 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
           {categories.map((cat) => (
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition cursor-pointer ${
-                selectedCategory === cat
+              key={cat.name}
+              onClick={() => setSelectedCategory(cat.name)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                selectedCategory === cat.name
                   ? (!liveCafeStatus.isOpen ? 'bg-white text-black' : 'bg-indigo-600 text-white')
                   : (!liveCafeStatus.isOpen ? 'bg-neutral-800 text-neutral-400 hover:text-white' : (isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900'))
               }`}
             >
-              {cat}
+              <span>{cat.name}</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                selectedCategory === cat.name 
+                  ? 'bg-black/20 text-white' 
+                  : 'bg-slate-700/40 text-slate-400'
+              }`}>
+                {cat.count}
+              </span>
             </button>
           ))}
         </div>
@@ -641,165 +704,185 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 ${
         !liveCafeStatus.isOpen ? 'grayscale contrast-125' : ''
       }`}>
-        {filteredProducts.map((dish, idx) => {
-          const inCart = cart.find(i => i.product.id === dish.id);
-          const isOutOfStock = dish.stock === 0 || dish.status === 'out_of_stock';
-          return (
-            <div
-              key={dish.id ? `${dish.id}-${dish.sku || idx}` : `dish-${idx}`}
-              onClick={() => handleDishClick(dish)}
-              className={`group rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col justify-between cursor-pointer hover:shadow-xl ${
-                !liveCafeStatus.isOpen
-                  ? 'bg-neutral-900 border-neutral-700 text-white hover:border-neutral-500'
-                  : isOutOfStock
-                  ? 'bg-slate-900/60 border-rose-900/40 text-slate-300 opacity-80'
-                  : (isDarkMode 
-                      ? 'bg-slate-900 border-slate-800 text-white hover:border-indigo-500/50' 
-                      : 'bg-white border-slate-200 text-slate-900 shadow-xs hover:border-indigo-300')
-              }`}
+        {filteredProducts.length === 0 ? (
+          <div className="col-span-full py-16 text-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8">
+            <Store className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+            <h4 className="text-base font-bold text-white">No dishes found in this category</h4>
+            <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+              {searchTerm 
+                ? `No dishes matching "${searchTerm}". Try another search term or select "All".` 
+                : `No dishes currently categorized under "${selectedCategory}". Click "All" to view all active menu items.`}
+            </p>
+            <button
+              onClick={() => { setSelectedCategory('All'); setSearchTerm(''); }}
+              className="mt-4 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-sm cursor-pointer"
             >
-              <div>
-                {/* Dish Image */}
-                <div className="relative h-44 w-full overflow-hidden bg-neutral-950">
-                  <img
-                    src={dish.imageUrl || '/images/frenchh.png'}
-                    alt={dish.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=300&q=80';
-                    }}
-                  />
-                  
-                  {/* Category badge */}
-                  <span className={`absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${
-                    !liveCafeStatus.isOpen
-                      ? 'bg-black/80 text-white border border-neutral-600'
-                      : 'bg-indigo-900/80 text-indigo-200 border border-indigo-500/40'
-                  }`}>
-                    {dish.category}
-                  </span>
+              View All Dishes ({liveProducts.length})
+            </button>
+          </div>
+        ) : (
+          filteredProducts.map((dish, idx) => {
+            const inCart = cart.find(i => i.product.id === dish.id);
+            const isOutOfStock = dish.stock === 0 || dish.status === 'out_of_stock';
+            const dishPrice = Number(dish.price || 0);
 
-                  {/* SOLD OUT / Out of stock overlay badge */}
-                  {!liveCafeStatus.isOpen ? (
-                    <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
-                      <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500">
-                        SOLD OUT
-                      </span>
-                    </div>
-                  ) : isOutOfStock ? (
-                    <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
-                      <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500 animate-pulse">
-                        SOLD OUT
-                      </span>
-                    </div>
-                  ) : dish.stock !== undefined && dish.stock <= 5 ? (
-                    <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-black flex items-center gap-1 shadow-md">
-                      <span>Low ({dish.stock})</span>
-                    </div>
-                  ) : (
-                    <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black flex items-center gap-1 shadow-md">
-                      <span>4.5</span>
-                      <span>★</span>
-                    </div>
-                  )}
+            return (
+              <div
+                key={dish.id ? `${dish.id}-${dish.sku || idx}` : `dish-${idx}`}
+                onClick={() => handleDishClick(dish)}
+                className={`group rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col justify-between cursor-pointer hover:shadow-xl ${
+                  !liveCafeStatus.isOpen
+                    ? 'bg-neutral-900 border-neutral-700 text-white hover:border-neutral-500'
+                    : isOutOfStock
+                    ? 'bg-slate-900/60 border-rose-900/40 text-slate-300 opacity-80'
+                    : (isDarkMode 
+                        ? 'bg-slate-900 border-slate-800 text-white hover:border-indigo-500/50' 
+                        : 'bg-white border-slate-200 text-slate-900 shadow-xs hover:border-indigo-300')
+                }`}
+              >
+                <div>
+                  {/* Dish Image */}
+                  <div className="relative h-44 w-full overflow-hidden bg-neutral-950">
+                    <img
+                      src={dish.imageUrl || (dish as any).image || '/images/frenchh.png'}
+                      alt={dish.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=300&q=80';
+                      }}
+                    />
+                    
+                    {/* Category badge */}
+                    <span className={`absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${
+                      !liveCafeStatus.isOpen
+                        ? 'bg-black/80 text-white border border-neutral-600'
+                        : 'bg-indigo-900/80 text-indigo-200 border border-indigo-500/40'
+                    }`}>
+                      {dish.category || 'General'}
+                    </span>
 
-                  {/* Quick price tag */}
-                  <span className={`absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-xl text-xs font-black font-mono shadow-md ${
-                    !liveCafeStatus.isOpen
-                      ? 'bg-black text-red-500 border border-neutral-700'
-                      : 'bg-slate-900/90 text-emerald-400 border border-slate-700'
-                  }`}>
-                    ₹{dish.price.toFixed(2)}
-                  </span>
-                </div>
+                    {/* SOLD OUT / Out of stock overlay badge */}
+                    {!liveCafeStatus.isOpen ? (
+                      <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
+                        <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500">
+                          SOLD OUT
+                        </span>
+                      </div>
+                    ) : isOutOfStock ? (
+                      <div className="absolute top-3 inset-x-0 flex items-center justify-center z-10">
+                        <span className="px-3 py-1 rounded bg-red-600 text-white text-xs font-black uppercase tracking-widest shadow-2xl border border-red-500 animate-pulse">
+                          SOLD OUT
+                        </span>
+                      </div>
+                    ) : dish.stock !== undefined && dish.stock <= 5 ? (
+                      <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-black flex items-center gap-1 shadow-md">
+                        <span>Low ({dish.stock})</span>
+                      </div>
+                    ) : (
+                      <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black flex items-center gap-1 shadow-md">
+                        <span>4.5</span>
+                        <span>★</span>
+                      </div>
+                    )}
 
-                {/* Content */}
-                <div className="p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-sm font-bold tracking-tight line-clamp-1 group-hover:text-indigo-400 transition-colors">
-                      {dish.name}
-                    </h3>
-                    <span className={`text-xs font-black font-mono ${!liveCafeStatus.isOpen ? 'text-red-500' : 'text-emerald-400'}`}>
-                      ₹{dish.price.toFixed(2)}
+                    {/* Quick price tag */}
+                    <span className={`absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-xl text-xs font-black font-mono shadow-md ${
+                      !liveCafeStatus.isOpen
+                        ? 'bg-black text-red-500 border border-neutral-700'
+                        : 'bg-slate-900/90 text-emerald-400 border border-slate-700'
+                    }`}>
+                      ₹{dishPrice.toFixed(2)}
                     </span>
                   </div>
 
-                  {/* Stock Availability Indicator */}
-                  <div className="flex items-center gap-1.5 text-[11px]">
-                    {isOutOfStock ? (
-                      <span className="font-bold text-rose-400 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-                        Out of stock (0 left)
+                  {/* Content */}
+                  <div className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-bold tracking-tight line-clamp-1 group-hover:text-indigo-400 transition-colors">
+                        {dish.name}
+                      </h3>
+                      <span className={`text-xs font-black font-mono ${!liveCafeStatus.isOpen ? 'text-red-500' : 'text-emerald-400'}`}>
+                        ₹{dishPrice.toFixed(2)}
                       </span>
-                    ) : dish.stock !== undefined && dish.stock <= 5 ? (
-                      <span className="font-bold text-amber-400 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                        Only {dish.stock} portions left!
-                      </span>
-                    ) : (
-                      <span className="font-medium text-emerald-400/90 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                        {dish.stock ?? 25} available
+                    </div>
+
+                    {/* Stock Availability Indicator */}
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      {isOutOfStock ? (
+                        <span className="font-bold text-rose-400 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                          Out of stock (0 left)
+                        </span>
+                      ) : dish.stock !== undefined && dish.stock <= 5 ? (
+                        <span className="font-bold text-amber-400 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                          Only {dish.stock} portions left!
+                        </span>
+                      ) : (
+                        <span className="font-medium text-emerald-400/90 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                          {dish.stock ?? 25} available
+                        </span>
+                      )}
+                    </div>
+
+                    <p className={`text-xs line-clamp-2 leading-relaxed ${!liveCafeStatus.isOpen ? 'text-neutral-400' : (isDarkMode ? 'text-slate-400' : 'text-slate-500')}`}>
+                      {!liveCafeStatus.isOpen
+                        ? (liveCafeStatus.closureReason || `currently cafe is closed. so I'm sorry boss ! . it will open at ${liveCafeStatus.formattedReopenTime || 'soon'}.`)
+                        : (dish.description || `${dish.name} freshly prepared with signature recipes.`)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Action Button */}
+                <div className={`p-4 pt-0 flex items-center justify-between gap-2 border-t mt-3 pt-3 ${
+                  !liveCafeStatus.isOpen ? 'border-neutral-800' : (isDarkMode ? 'border-slate-800/80' : 'border-slate-100')
+                }`}>
+                  <span className="text-[11px] font-semibold text-neutral-400 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    5-10 MIN
+                    {liveCafeStatus.isOpen && (
+                      <span className="ml-1 text-[10px] font-extrabold text-neutral-400 uppercase hidden sm:inline">
+                        • FREE DELIVERY
                       </span>
                     )}
-                  </div>
+                  </span>
 
-                  <p className={`text-xs line-clamp-2 leading-relaxed ${!liveCafeStatus.isOpen ? 'text-neutral-400' : (isDarkMode ? 'text-slate-400' : 'text-slate-500')}`}>
-                    {!liveCafeStatus.isOpen
-                      ? (liveCafeStatus.closureReason || `currently cafe is closed. so I'm sorry boss ! . it will open at ${liveCafeStatus.formattedReopenTime || 'soon'}.`)
-                      : (dish.description || `${dish.name} freshly prepared with signature recipes.`)}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDishClick(dish);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                      !liveCafeStatus.isOpen
+                        ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border border-neutral-700 uppercase font-extrabold text-[10px]'
+                        : isOutOfStock
+                        ? 'bg-rose-950/60 border border-rose-800 text-rose-300 hover:bg-rose-900/60 font-bold'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
+                    }`}
+                  >
+                    {!liveCafeStatus.isOpen ? (
+                      <span>UNAVAILABLE</span>
+                    ) : isOutOfStock ? (
+                      <span>SOLD OUT</span>
+                    ) : inCart ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>Added ({inCart.quantity})</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Order Parcel</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
-
-              {/* Action Button */}
-              <div className={`p-4 pt-0 flex items-center justify-between gap-2 border-t mt-3 pt-3 ${
-                !liveCafeStatus.isOpen ? 'border-neutral-800' : (isDarkMode ? 'border-slate-800/80' : 'border-slate-100')
-              }`}>
-                <span className="text-[11px] font-semibold text-neutral-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  5-10 MIN
-                  {liveCafeStatus.isOpen && (
-                    <span className="ml-1 text-[10px] font-extrabold text-neutral-400 uppercase hidden sm:inline">
-                      • FREE DELIVERY
-                    </span>
-                  )}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDishClick(dish);
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    !liveCafeStatus.isOpen
-                      ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border border-neutral-700 uppercase font-extrabold text-[10px]'
-                      : isOutOfStock
-                      ? 'bg-rose-950/60 border border-rose-800 text-rose-300 hover:bg-rose-900/60 font-bold'
-                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
-                  }`}
-                >
-                  {!liveCafeStatus.isOpen ? (
-                    <span>UNAVAILABLE</span>
-                  ) : isOutOfStock ? (
-                    <span>SOLD OUT</span>
-                  ) : inCart ? (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                      <span>Added ({inCart.quantity})</span>
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Order Parcel</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
 
       {/* ========================================================================= */}
